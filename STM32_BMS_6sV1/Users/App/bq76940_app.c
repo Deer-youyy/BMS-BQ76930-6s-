@@ -1,0 +1,428 @@
+#include "bq76940_app.h"
+#include "bms_log.h"
+#include "bq76940_print.h"
+
+#include "bq76200_exec.h"
+#include "io_ctrl.h"
+#include "delay.h"
+#include "stdio.h"
+#include "string.h"
+
+/* BQ76940 上电 bring-up 最大尝试次数 */
+#define BQ76940_APP_BRINGUP_RETRY_LIMIT 3U
+
+/* BQ76940 bring-up 阶段码 */
+#define BQ76940_BRINGUP_STAGE_WAKE        1U    // 唤醒阶段
+#define BQ76940_BRINGUP_STAGE_BASIC       2U    // 基础初始化阶段
+#define BQ76940_BRINGUP_STAGE_HW_CONFIG   3U    // 硬件配置阶段
+#define BQ76940_BRINGUP_STAGE_STATUS      4U    // 状态读取阶段
+#define BQ76940_BRINGUP_STAGE_OCDSCD      5U    // 过流/短路保护配置(OCD/SCD)
+#define BQ76940_BRINGUP_STAGE_SAMPLE      6U    // ADC采样阶段
+
+
+void BQ76940_AppInitDefaultConfig(BQ76940_AppCtx_t *ctx)
+{
+    if (ctx == 0)
+    {
+        return;
+    }
+
+    memset(ctx, 0, sizeof(BQ76940_AppCtx_t));
+
+    /* 软件告警实验阈值 */
+    ctx->alarm_th.uv_enter_mV = 3200;
+    ctx->alarm_th.uv_exit_mV = 3300;
+    ctx->alarm_th.ov_enter_mV = 4180;
+    ctx->alarm_th.ov_exit_mV = 4130;
+    ctx->alarm_th.diff_enter_mV = 150;
+    ctx->alarm_th.diff_exit_mV = 110;
+
+    ctx->alarm_th.ot_enter_dC = 600; /* 60.0°C 进入过温告警 */
+    ctx->alarm_th.ot_exit_dC = 550;  /* 55.0°C 退出过温告警 */
+
+    ctx->alarm_th.ut_enter_dC = 200; /* 20.0°C 进入低温告警 */
+    ctx->alarm_th.ut_exit_dC = 230;  /* 23.0°C 退出低温告警 */
+
+    ctx->ot_cutoff_active = 0;
+    ctx->ut_chg_block_active = 0;
+
+    /* 硬件保护真实配置 */
+    ctx->hw_cfg.ov_target_mV = 4200;
+    ctx->hw_cfg.uv_target_mV = 3000;
+    ctx->hw_cfg.protect3 = 0x50;
+
+    /* 新增：电流相关初值 */
+    ctx->pack_current_mA = 0;
+    ctx->pack_current_dir = 0;
+
+    ctx->ts1_raw_adc = 0;
+    ctx->ts1_temp_dC = 0;
+    /* OCD / SCD 第一阶段：先用保守配置，重点验证装载链和状态观察链 */
+    ctx->ocdscd_cfg.scd_delay_code = BQ76940_SCD_DELAY_400US;
+    ctx->ocdscd_cfg.scd_thresh_code = BQ76940_SCD_THRESH_200MV;
+
+    ctx->ocdscd_cfg.ocd_delay_code = BQ76940_OCD_DELAY_320MS;
+    ctx->ocdscd_cfg.ocd_thresh_code = BQ76940_OCD_THRESH_100MV;
+
+    ctx->fault_clear_once_enable = 0;
+    ctx->fault_mask_active = 0;
+    ctx->sys_stat_before_clear = 0;
+    ctx->sys_stat_after_clear = 0;
+
+    ctx->hw_ocd_active = 0;
+    ctx->hw_scd_active = 0;
+    ctx->hw_dsg_block_active = 0;
+    ctx->hw_fault_recover_once_enable = 0;
+
+    ctx->hw_fault_sys_stat_latched = 0U;
+    ctx->hw_fault_last_apply_ret = 0U;
+    ctx->hw_fault_last_code = BQ76940_HW_FAULT_CODE_NONE;
+    ctx->hw_fault_count = 0U;
+
+    // 初始化运行就诊
+    BQ76940_AppRuntimeDiagInit(&ctx->runtime_diag);
+
+    BQ76940_ClearCellBalRegs(&ctx->cellbal_wr);
+    BQ76940_ClearCellBalRegs(&ctx->cellbal_rd);
+
+    /* BQ76200 执行层初始化 */
+    BQ76200_ExecInit(&ctx->bq76200_exec);
+
+    /* 自动均衡第一版参数 */
+    ctx->bal_cfg.diff_enter_mV = 80;       /* 压差 >= 80mV 开始均衡 */
+    ctx->bal_cfg.diff_exit_mV = 30;        /* 压差 <= 30mV 退出均衡 */
+    ctx->bal_cfg.min_cell_mV = 3800;       /* 最高单体至少高于 3.9V 才考虑均衡 */
+    ctx->bal_cfg.max_abs_current_mA = 200; /* 电流绝对值小于 200mA 才允许均衡 */
+    
+		ctx->bal_cfg.refresh_period_ms = 4000;	/*每四秒刷新一次*/
+		ctx->bal_cfg.parity_enable = 1;					/*启用奇偶窗口分时*/
+    
+    ctx->bal_active = 0;
+    ctx->bal_target_label = 0;
+    ctx->bal_target_count = 0U;
+		
+		ctx->bal_last_refresh_ms = 0u;
+		ctx->bal_parity_phase = 0;
+    
+
+    BQ76940_ClearCellBalRegs(&ctx->bal_auto_wr);
+    BQ76940_ClearCellBalRegs(&ctx->bal_auto_rd);
+}
+
+// static uint8_t BQ76940_AppPrintSysCtrl2Readback(const char *tag)
+//{
+//     uint8_t sys_ctrl2;
+
+//    if (BQ76940_ReadReg(BQ76940_REG_SYS_CTRL2, &sys_ctrl2) != BQ76940_OK)
+//    {
+//        return 1;
+//    }
+
+//    printf("[%s]\r\n", tag);
+//    printf("SYS_CTRL2 = 0x%02X\r\n", sys_ctrl2);
+//    printf("DSG_ON    = %d\r\n", (sys_ctrl2 & BQ76940_SYS_CTRL2_DSG_ON) ? 1 : 0);
+//    printf("CHG_ON    = %d\r\n", (sys_ctrl2 & BQ76940_SYS_CTRL2_CHG_ON) ? 1 : 0);
+
+//    return 0;
+//}
+
+static void BQ76940_AppSetBringUpFault(BQ76940_AppCtx_t *ctx,
+                                       uint8_t stage,
+                                       uint8_t error)
+{
+    if (ctx == 0)
+    {
+        return;
+    }
+
+    ctx->diag_state.bringup_last_stage = stage;
+    ctx->diag_state.bringup_last_error = error;
+}
+
+uint8_t BQ76940_AppForceExternalOff(BQ76940_AppCtx_t *ctx)
+{
+    if (ctx == 0)
+    {
+        return 1U;
+    }
+
+    /*
+     * 外部执行层紧急关断：
+     * - 不访问 I2C
+     * - 只操作 BQ76200 GPIO 执行层状态
+     * - RuntimeTask 被唤醒后应优先执行它
+     */
+    BQ76200_ExecForceOff(&ctx->bq76200_exec);
+
+    return 0U;
+}
+
+uint8_t BQ76940_AppForceAfeOffHw(void)
+{
+    uint8_t result = SAFE_OFF_FAIL_NONE;
+    uint8_t ret;
+    BQ76940_CellBalRegs_t zero_bal;
+
+    BQ76940_ClearCellBalRegs(&zero_bal);
+
+    ret = BQ76940_WriteCellBalRegs(&zero_bal);
+    if (ret != 0U)
+    {
+        result |= SAFE_OFF_FAIL_CELLBAL;
+    }
+
+    ret = BQ76940_SetFETState(0U, 0U);
+    if (ret != 0U)
+    {
+        result |= SAFE_OFF_FAIL_AFE_FET;
+    }
+
+    return result;
+}
+
+void BQ76940_AppForceAfeOffCommit(BQ76940_AppCtx_t *ctx,
+                                  uint8_t safe_off_result)
+{
+    if (ctx == 0)
+    {
+        return;
+    }
+
+    /*
+     * 只有满足以下条件，才能确认 CELLBAL 已经写入成功：
+     * 1. 已经成功取得 I2C 总线锁；
+     * 2. CELLBAL 寄存器写入没有失败。
+     *
+     * FET 关闭失败不影响均衡状态的提交，因为二者是独立操作。
+     */
+    if ((safe_off_result &
+         (SAFE_OFF_FAIL_I2C_LOCK |
+          SAFE_OFF_FAIL_CELLBAL)) == 0U)
+    {
+        ctx->bal_active = 0U;
+        ctx->bal_target_label = 0U;
+
+        BQ76940_ClearCellBalRegs(&ctx->cellbal_wr);
+        BQ76940_ClearCellBalRegs(&ctx->cellbal_rd);
+        BQ76940_ClearCellBalRegs(&ctx->bal_auto_wr);
+        BQ76940_ClearCellBalRegs(&ctx->bal_auto_rd);
+    }
+}
+
+static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
+{
+    uint8_t ret;
+
+    if (ctx == 0)
+    {
+        return 1U;
+    }
+
+    /* 1. 唤醒 BQ76940 */
+    BMS_LOG_PERIODIC("[INIT] wake start\r\n");
+    BQ_WAKE_Pulse();
+    BMS_LOG_PERIODIC("[INIT] wake ok\r\n");
+
+    delay_ms(20);
+
+    /* 2. 最小 bring-up：初始化寄存器、读取基础寄存器、读取 ADC 校准 */
+    ret = BQ76940_ProtectBringUp(&ctx->regs, &ctx->calib);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_BASIC,
+                                   ret);
+        return 11U;
+    }
+
+    BMS_LOG_PERIODIC("[INIT] AFE ok\r\n");
+    BMS_LOG_PERIODIC("[INIT] regs ok\r\n");
+    if (BMS_LOG_PERIODIC_ENABLE != 0U)
+        BQ76940_PrintBasicRegs(&ctx->regs);
+
+    /* 3. 加载硬件 OV / UV 保护参数 */
+    ret = BQ76940_ProtectLoadConfig(&ctx->hw_cfg,
+                                    &ctx->calib,
+                                    &ctx->regs);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_HW_CONFIG,
+                                   ret);
+        return 12U;
+    }
+
+    if (BMS_LOG_PERIODIC_ENABLE != 0U)
+        BQ76940_PrintBasicRegs(&ctx->regs);
+
+    /* 4. 读取当前硬件状态 */
+    ret = BQ76940_ProtectReadStatus(&ctx->sys_stat, &ctx->sys_ctrl2);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_STATUS,
+                                   ret);
+        return 13U;
+    }
+
+    /* 5. 加载 OCD / SCD 硬件保护参数 */
+    ret = BQ76940_ProtectLoadOcdScd(&ctx->ocdscd_cfg, &ctx->regs);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_OCDSCD,
+                                   ret);
+        return 14U;
+    }
+
+    if (BMS_LOG_PERIODIC_ENABLE != 0U)
+        BQ76940_ProtectPrintStatus(ctx->sys_stat, ctx->sys_ctrl2);
+
+    /*
+     * 6. 采样链路自检
+     * 目的：
+     * - 验证 9 节电压读取链路
+     * - 验证 CC 电流读取链路
+     * - 验证 TS1 温度读取链路
+     * - 验证 SYS_STAT 运行状态读取链路
+     */
+    ret = BQ76940_AppSampleUpdate(ctx);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_SAMPLE,
+                                   ret);
+        return 15U;
+    }
+
+    BMS_LOG_PERIODIC("[INIT] sample ok\r\n");
+
+    return 0U;
+}
+
+uint8_t BQ76940_AppBringUpAndSelfTest(BQ76940_AppCtx_t *ctx)
+{
+    uint8_t ret;
+    uint8_t attempt;
+
+    if (ctx == 0)
+    {
+        return 1U;
+    }
+
+    /* 1. 打印当前软件实验阈值 */
+    if (BMS_LOG_PERIODIC_ENABLE != 0U)
+        BQ76940_PrintAlarmThresholds9(&ctx->alarm_th);
+
+    BMS_LOG_PERIODIC("[INIT] self-test\r\n");
+    BMS_LOG_PERIODIC("");
+    BMS_LOG_PERIODIC("");
+
+    /*上电前先清楚所有故障*/
+    ctx->diag_state.bringup_attempt_count = 0U;
+    ctx->diag_state.bringup_fault_active = 0U;
+    ctx->diag_state.bringup_last_stage = 0U;
+    ctx->diag_state.bringup_last_error = 0U;
+
+    for (attempt = 1U;
+         attempt <= BQ76940_APP_BRINGUP_RETRY_LIMIT;
+         attempt++)
+    {
+        ctx->diag_state.bringup_attempt_count = attempt;
+
+        BMS_LOG_PERIODIC("[INIT] try:%d/%d\r\n",
+                         attempt,
+                         BQ76940_APP_BRINGUP_RETRY_LIMIT);
+
+        ret = BQ76940_AppBringUpOnce(ctx);
+        if (ret == 0U)
+        {
+            ctx->diag_state.bringup_fault_active = 0U;
+
+            BMS_LOG_RUNTIME("[INIT] ok:%d\r\n", attempt);
+            return 0U;
+        }
+
+        BMS_LOG_ERROR("[INIT] fail:%d/%d/%d/%d\r\n",
+                      attempt,
+                      ret,
+                      ctx->diag_state.bringup_last_stage,
+                      ctx->diag_state.bringup_last_error);
+
+        delay_ms(100);
+    }
+
+    ctx->diag_state.bringup_fault_active = 1U;
+
+    BMS_LOG_ERROR("[INIT] final:%d/%d/%d\r\n",
+                  ctx->diag_state.bringup_attempt_count,
+                  ctx->diag_state.bringup_last_stage,
+                  ctx->diag_state.bringup_last_error);
+
+    return 100U;
+}
+
+#define BMS_PRINT_CELL_DETAIL_ENABLE 0U
+
+void BQ76940_AppPrintRuntime(const BQ76940_AppCtx_t *ctx)
+{
+    uint8_t alm_flags = 0U;
+    uint8_t prot_flags = 0U;
+
+    if (ctx == 0)
+    {
+        return;
+    }
+
+#if (BMS_PRINT_CELL_DETAIL_ENABLE != 0U)
+    BQ76940_PrintAllMappedCellVoltages9(ctx->cell_raw,
+                                        ctx->cell_mV,
+                                        ctx->pack_total_mV);
+#endif
+
+    if (ctx->alarm_state.uv_flag != 0U)
+        alm_flags |= 0x01U;
+    if (ctx->alarm_state.ov_flag != 0U)
+        alm_flags |= 0x02U;
+    if (ctx->alarm_state.diff_flag != 0U)
+        alm_flags |= 0x04U;
+    if (ctx->alarm_state.ot_flag != 0U)
+        alm_flags |= 0x08U;
+    if (ctx->alarm_state.ut_flag != 0U)
+        alm_flags |= 0x10U;
+
+    if (ctx->ot_cutoff_active != 0U)
+        prot_flags |= 0x01U;
+    if (ctx->ut_chg_block_active != 0U)
+        prot_flags |= 0x02U;
+    if (ctx->hw_dsg_block_active != 0U)
+        prot_flags |= 0x04U;
+    if (ctx->hw_ocd_active != 0U)
+        prot_flags |= 0x08U;
+    if (ctx->hw_scd_active != 0U)
+        prot_flags |= 0x10U;
+    if (ctx->bal_active != 0U)
+        prot_flags |= 0x20U;
+
+    BQ76940_PrintAllMappedCellVoltages9(ctx->cell_raw,
+                                        ctx->cell_mV,
+                                        ctx->pack_total_mV);
+    BMS_LOG_PERIODIC("[BMS] Pack:%lu Max:VC%u=%umV Min:VC%u=%umV Diff:%umV Current:%ldmA Temp:%d Alarm:%02X Protect:%02X Balance:%u Target:VC%u Count:%u Mask:%02X/%02X/%02X Sys:%02X\r\n",
+                     (unsigned long)ctx->pack_total_mV,
+                     ctx->cell_stats.max_cell_label,
+                     ctx->cell_stats.max_mV,
+                     ctx->cell_stats.min_cell_label,
+                     ctx->cell_stats.min_mV,
+                     ctx->cell_stats.diff_mV,
+                     (long)ctx->pack_current_mA,
+                     ctx->ts1_temp_dC,
+                     alm_flags,
+                     prot_flags,
+                     ctx->bal_active,
+                     ctx->bal_target_label,
+                     ctx->bal_target_count,
+                     ctx->bal_auto_wr.cellbal1,
+                     ctx->bal_auto_wr.cellbal2,
+                     ctx->bal_auto_wr.cellbal3,
+                     ctx->sys_stat);
+}
