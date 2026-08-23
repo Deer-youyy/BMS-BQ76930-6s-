@@ -22,6 +22,7 @@
 #include "timer.h"
 #include "stm32f10x_it.h"
 #include "can.h"
+#include "bms_config.h"
 /**
   * @file   main
   * @brief  Main program.
@@ -79,6 +80,7 @@ if( Get_USART1_StopFlag() == USART1_STOP_TRUE)  //????????????
 	const u8 TEXT_Buffer[]={0,1};
 #define SIZE sizeof(TEXT_Buffer)
 	u8 datatemp[SIZE],OV_FLAG,UV_FLAG,OC_FLAG,temp_up;
+	unsigned char i;
 	u32 FLASH_SIZE = 16*1024*1024;
 extern int Batteryval[50];
 int main(void)
@@ -116,30 +118,47 @@ int main(void)
 			   Cell_Balance(50);           //均衡开启条件为压差大于50mV即开启；
 			  LEDXToggle(5);
 			//}
-			if((Batteryval[0]>4200)||(Batteryval[1]>4200)||(Batteryval[4]>4200)||(Batteryval[5]>4200)||(Batteryval[6]>4200)||(Batteryval[9]>4200))
+			/* M01：OV/UV 改为 6S Domain Cell 0..5 访问，稀疏 VC 位置见 bms_config.h */
+			for(i=0;i<BMS_CELL_COUNT;i++)  //过压判断：任一有效电芯 >4200mV
 					{
-						Only_Close_CHG();
-						IIC1_write_one_byte_CRC(SYS_STAT,0xFF); //清除状态
-						OV_FLAG=1;
+						if(Batteryval[bms_cell_batteryval_index[i]]>4200)
+							{
+								Only_Close_CHG();
+								IIC1_write_one_byte_CRC(SYS_STAT,0xFF); //清除状态
+								OV_FLAG=1;
+								break;
+							}
 					}
        if(OV_FLAG==1)
 			 {
-					if((Batteryval[0]<4000)&&(Batteryval[1]<4000)&&(Batteryval[4]<4000)&&(Batteryval[5]<4000)&&(Batteryval[6]<4000)&&(Batteryval[9]<4000))
+				 for(i=0;i<BMS_CELL_COUNT;i++)  //过压恢复判断：全部有效电芯 <4000mV
+				 {
+					 if(Batteryval[bms_cell_batteryval_index[i]]>=4000) break;
+				 }
+				 if(i==BMS_CELL_COUNT)
 					{
 						Only_Open_CHG();
 						IIC1_write_one_byte_CRC(SYS_STAT,0xFF); //清除状态
 						OV_FLAG=0;
 					}
 			}
-					if((Batteryval[0]<2800)||(Batteryval[1]<2800)||(Batteryval[4]<2800)||(Batteryval[5]<2800)||(Batteryval[6]<2800)||(Batteryval[9]<2800))
+					for(i=0;i<BMS_CELL_COUNT;i++)  //欠压判断：任一有效电芯 <2800mV
 					{
-						Only_Close_DSG();
-						IIC1_write_one_byte_CRC(SYS_STAT,0xFF); //清除状态
-						UV_FLAG=1;
+						if(Batteryval[bms_cell_batteryval_index[i]]<2800)
+							{
+								Only_Close_DSG();
+								IIC1_write_one_byte_CRC(SYS_STAT,0xFF); //清除状态
+								UV_FLAG=1;
+								break;
+							}
 					}
       if(UV_FLAG==1)
 			{
-					if((Batteryval[0]>3000)&&(Batteryval[1]>3000)&&(Batteryval[4]>3000)&&(Batteryval[5]>3000)&&(Batteryval[6]>3000)&&(Batteryval[9]>3000))
+					for(i=0;i<BMS_CELL_COUNT;i++)  //欠压恢复判断：全部有效电芯 >3000mV
+					{
+						if(Batteryval[bms_cell_batteryval_index[i]]<=3000) break;
+					}
+					if(i==BMS_CELL_COUNT)
 					{
 						Only_Open_DSG();
 						IIC1_write_one_byte_CRC(SYS_STAT,0xFF); //清除状态
