@@ -14,6 +14,7 @@
 #include "bq34z100_app.h"
 #include "bq76200_exec_port.h"
 #include "bq76940_alert_sim.h"
+#include "bq76940_balance.h"
 
 #define BMS_TEST_FAKE_HW_FAULT_SYS_STAT (BQ76940_SYS_STAT_OCD | BQ76940_SYS_STAT_SCD)
 

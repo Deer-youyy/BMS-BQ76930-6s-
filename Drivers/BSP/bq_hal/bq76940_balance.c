@@ -25,6 +25,7 @@
  * **************************************************** */
 
 #include "bq_hal_balance.h"
+#include "bq76940_balance.h"
 #include "bq76940_drv.h"
 
 /* VC label 映射表：逻辑下标 i 对应真实的 VC 标签编号。

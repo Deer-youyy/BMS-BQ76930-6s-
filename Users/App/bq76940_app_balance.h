@@ -1,7 +1,6 @@
 #ifndef __BQ76940_APP_BALANCE_H
 #define __BQ76940_APP_BALANCE_H
 
-#include "bq76940_drv.h"
 #include "bq_hal_balance.h"
 
 typedef struct
@@ -53,7 +52,7 @@ typedef struct
  *
  * 说明：
  *   wr / rd 已改为中性逻辑均衡 mask（BqHalBalanceMask_t），
- *   不再直接使用 BQ76940_CellBalRegs_t。
+ *   不再直接使用 BQ 芯片专有的 CellBal 寄存器类型。
  *   target_logical 保存逻辑单体下标（0~8），
  *   最终由 Provider 转换成 VC label 用于 CAN 输出。
  */
@@ -67,15 +66,6 @@ typedef struct
     BqHalBalanceMask_t wr;  /* 准备写入的逻辑均衡 mask */
     BqHalBalanceMask_t rd;  /* 写入后读回的逻辑均衡 mask */
 } BQ76940_BalanceRequest_t;
-
-/*
- * BQ76940 兼容性 API（由 BQ76940 Provider 提供）
- *   把中性逻辑 mask 转换回 legacy BQ76940_CellBalRegs_t，
- *   仅用于 AppCtx 兼容字段 / CAN 0x306 快照 / Safe-Off 日志，
- *   不参与 Balance 决策，不暴露给 Neutral Balance API。
- */
-void BqHalBalance_GetLegacyCellBalRegs(const BqHalBalanceMask_t *mask,
-                                       BQ76940_CellBalRegs_t *regs);
 
 struct BQ76940_AppCtx;
 
