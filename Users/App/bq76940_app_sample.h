@@ -2,6 +2,7 @@
 #define __BQ76940_APP_SAMPLE_H
 
 #include "bq76940_drv.h"
+#include "../../Core/bms_types.h"
 
 /*
  * BQ76940 采样快照数据
@@ -16,8 +17,8 @@
  */
 typedef struct
 {
-    uint16_t cell_raw[BQ76940_CELL_COUNT_9];
-    uint16_t cell_mV[BQ76940_CELL_COUNT_9];
+    uint16_t cell_raw[BQ76940_CELL_COUNT_9]; /* 原始 ADC，硬件相关，随驱动宏 */
+    uint16_t cell_mV[BMS_CELL_COUNT];        /* 域电压（mV），随 Core 领域宏 */
 
     uint32_t pack_total_mV;
     BQ76940_CellStats9_t cell_stats;

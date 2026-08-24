@@ -2,6 +2,7 @@
 #define __BQ76940_APP_H
 
 #include "bq76940_drv.h"
+#include "../../Core/bms_types.h"
 #include "bq76940_alarm.h"
 #include "bq76940_protect.h"
 #include "bq76200_exec.h"
@@ -35,8 +36,8 @@ typedef struct BQ76940_AppCtx
 	uint8_t sys_ctrl2;
 
 	/* 单体采样数据 */
-	uint16_t cell_raw[BQ76940_CELL_COUNT_9];
-	uint16_t cell_mV[BQ76940_CELL_COUNT_9];
+	uint16_t cell_raw[BQ76940_CELL_COUNT_9]; /* 原始 ADC，硬件相关，随驱动宏 */
+	uint16_t cell_mV[BMS_CELL_COUNT];		 /* 域电压（mV），随 Core 领域宏 */
 	uint32_t pack_total_mV;
 	BQ76940_CellStats9_t cell_stats;
 
