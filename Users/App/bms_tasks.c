@@ -1035,6 +1035,16 @@ static void BMS_BalanceTask(void *argument)
                     }
 
                     ret = BQ76940_AppBalanceCommit(app, &bal_req);
+                    /*
+                     * 通过 Provider 兼容 API，把逻辑 mask 转换回 legacy
+                     * BQ76940_CellBalRegs_t，用于 CAN 0x306 与 Safe-Off 快照。
+                     * 仅在 START/STOP 动作后回填，NONE 动作不回填。
+                     */
+                    if ((ret == 0U) && (bal_req.action != BQ76940_BAL_ACTION_NONE))
+                    {
+                        BqHalBalance_GetLegacyCellBalRegs(&bal_req.wr, &app->bal_auto_wr);
+                        BqHalBalance_GetLegacyCellBalRegs(&bal_req.rd, &app->bal_auto_rd);
+                    }
 
                     /*
                      * 均衡阶段结束后，继续通知 ControlTask。

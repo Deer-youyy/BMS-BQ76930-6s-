@@ -523,6 +523,11 @@
               <FilePath>..\..\Drivers\BSP\bq_hal\bq76940_measure.c</FilePath>
             </File>
             <File>
+              <FileName>bq76940_balance.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Drivers\BSP\bq_hal\bq76940_balance.c</FilePath>
+            </File>
+            <File>
               <FileName>can_drv.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\Drivers\BSP\can\can_drv.c</FilePath>
