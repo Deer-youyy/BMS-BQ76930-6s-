@@ -116,57 +116,6 @@ uint8_t BQ76930_WriteReg_CRC(uint8_t reg_addr, uint8_t data)
     return BQ76930_OK;
 }
 
-/* ==================== 初始化 ==================== */
-
-uint8_t BQ76930_InitForBringUp(void)
-{
-    uint8_t ret = 0;
-
-    /* 寄存器配置取自参考例程 BQ769_INITAdd/BQ769_INITdata，仅保底默认值，
-     * 不包含保护阈值策略计算（OV_TRIP/UV_TRIP 等由上层单独处理）。 */
-    static const uint8_t reg_table[] =
-    {
-        BQ76930_REG_SYS_STAT,
-        BQ76930_REG_CELLBAL1,
-        BQ76930_REG_CELLBAL2,
-        BQ76930_REG_SYS_CTRL1,
-        BQ76930_REG_SYS_CTRL2,
-        BQ76930_REG_PROTECT1,
-        BQ76930_REG_PROTECT2,
-        BQ76930_REG_PROTECT3,
-        BQ76930_REG_OV_TRIP,
-        BQ76930_REG_UV_TRIP,
-        BQ76930_REG_CC_CFG
-    };
-
-    static const uint8_t data_table[] =
-    {
-        0xFF, /* 清 SYS_STAT */
-        0x00, /* 关均衡 */
-        0x00,
-        0x18, /* SYS_CTRL1: 使能 ADC */
-        0x43, /* SYS_CTRL2: CHG/DSG 初始关断 */
-        0x00, /* OCD/SCD 默认不启用 */
-        0x00,
-        0x00, /* PROTECT3: UV/OV 延时默认 */
-        0x00, /* OV_TRIP 默认（阈值由上层策略写入） */
-        0x00, /* UV_TRIP 默认 */
-        0x19  /* CC_CFG 固定 0x19 */
-    };
-
-    uint8_t i;
-
-    for (i = 0; i < (uint8_t)(sizeof(reg_table) / sizeof(reg_table[0])); i++)
-    {
-        ret = BQ76930_WriteReg_CRC(reg_table[i], data_table[i]);
-        if (ret != BQ76930_OK)
-        {
-            return (uint8_t)(20 + i);
-        }
-    }
-
-    return BQ76930_OK;
-}
 
 /* ==================== 状态寄存器 ==================== */
 
@@ -506,45 +455,3 @@ uint8_t BQ76930_ConvertNtcTemp_dC(uint16_t raw_adc, int16_t *temp_dC)
     return BQ76930_OK;
 }
 
-/* ==================== FET 控制 ==================== */
-
-uint8_t BQ76930_SetFETState(uint8_t chg_on, uint8_t dsg_on)
-{
-    uint8_t sys_ctrl2;
-
-    if ((chg_on > 1U) || (dsg_on > 1U))
-    {
-        return BQ76930_ERR_PARAM;
-    }
-
-    /* 读改写 SYS_CTRL2，避免误改 CC 等其它位 */
-    if (BQ76930_ReadReg(BQ76930_REG_SYS_CTRL2, &sys_ctrl2) != BQ76930_OK)
-    {
-        return BQ76930_ERR_COMM;
-    }
-
-    if (chg_on != 0U)
-    {
-        sys_ctrl2 |= BQ76930_SYS_CTRL2_CHG_ON;
-    }
-    else
-    {
-        sys_ctrl2 &= (uint8_t)(~BQ76930_SYS_CTRL2_CHG_ON);
-    }
-
-    if (dsg_on != 0U)
-    {
-        sys_ctrl2 |= BQ76930_SYS_CTRL2_DSG_ON;
-    }
-    else
-    {
-        sys_ctrl2 &= (uint8_t)(~BQ76930_SYS_CTRL2_DSG_ON);
-    }
-
-    if (BQ76930_WriteReg_CRC(BQ76930_REG_SYS_CTRL2, sys_ctrl2) != BQ76930_OK)
-    {
-        return BQ76930_ERR_COMM;
-    }
-
-    return BQ76930_OK;
-}

@@ -110,9 +110,6 @@ uint8_t BQ76930_ReadReg(uint8_t reg_addr, uint8_t *data);
 uint8_t BQ76930_WriteReg(uint8_t reg_addr, uint8_t data);
 uint8_t BQ76930_WriteReg_CRC(uint8_t reg_addr, uint8_t data);
 
-/* ==================== ³õÊ¼»¯ ==================== */
-uint8_t BQ76930_InitForBringUp(void);
-
 /* ==================== ×´Ì¬¼Ä´æÆ÷¶ÁÈ¡ ==================== */
 uint8_t BQ76930_ReadSysStat(uint8_t *sys_stat);
 uint8_t BQ76930_ClearSysStatBits(uint8_t mask);
@@ -148,8 +145,5 @@ uint8_t BQ76930_ConvertCurrent_mA(int16_t cc_raw_s16,
 /* ==================== ÎÂ¶È£¨NTC£© ==================== */
 uint8_t BQ76930_ReadNtcRaw(uint8_t ts_hi_reg, uint8_t ts_lo_reg, uint16_t *raw_adc);
 uint8_t BQ76930_ConvertNtcTemp_dC(uint16_t raw_adc, int16_t *temp_dC);
-
-/* ==================== FET ¿ØÖÆ ==================== */
-uint8_t BQ76930_SetFETState(uint8_t chg_on, uint8_t dsg_on);
 
 #endif /* __BQ76930_DRV_H */

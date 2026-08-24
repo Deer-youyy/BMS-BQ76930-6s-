@@ -7,13 +7,13 @@
  *
  * 架构：
  *   App / Component
- *        ↓
+ *        |
  *      BqHal
- *        ↓
+ *        |
  *   bq76930_hal.c
- *        ↓
+ *        |
  *   BQ76930 Driver
- *        ↓
+ *        |
  *     Hardware
  * **************************************************** */
 
@@ -48,11 +48,36 @@ BqHal_t *BqHal_Get(void)
 
 uint8_t BqHal_ApplyFetEn(BqHal_t *hal, uint8_t chg_en, uint8_t dsg_en)
 {
+    uint8_t sys_ctrl2;
+
     if (hal == 0U)
     {
         return 1U; /* 未装配适配器，视为失败 */
     }
 
-    /* 1:1 映射到 BQ76930 驱动 FET 接口，保持原 CHG/DSG 语义 */
-    return BQ76930_SetFETState(chg_en, dsg_en);
+    /* 读改写 SYS_CTRL2，在适配器内完成 CHG/DSG 使能意图到寄存器的映射 */
+    if (BQ76930_ReadReg(BQ76930_REG_SYS_CTRL2, &sys_ctrl2) != BQ76930_OK)
+    {
+        return BQ76930_ERR_COMM;
+    }
+
+    if (chg_en != 0U)
+    {
+        sys_ctrl2 |= BQ76930_SYS_CTRL2_CHG_ON;
+    }
+    else
+    {
+        sys_ctrl2 &= (uint8_t)(~BQ76930_SYS_CTRL2_CHG_ON);
+    }
+
+    if (dsg_en != 0U)
+    {
+        sys_ctrl2 |= BQ76930_SYS_CTRL2_DSG_ON;
+    }
+    else
+    {
+        sys_ctrl2 &= (uint8_t)(~BQ76930_SYS_CTRL2_DSG_ON);
+    }
+
+    return BQ76930_WriteReg_CRC(BQ76930_REG_SYS_CTRL2, sys_ctrl2);
 }
