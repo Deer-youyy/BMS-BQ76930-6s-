@@ -8,7 +8,6 @@
 #include "string.h"
 #include "IO_CTRL.h"
 #include "usart2.h"
-#include "../Core/bms_config.h"
 /*****************************
 file:BQData.c
 decription:
@@ -396,10 +395,9 @@ float SOC;
 void Get_Update_ALL_Data(void)
 {
 	int i,Sum_val=0;
-  /* M01：只累计 6 个有效电芯（稀疏 VC 位置见 bms_config.h），不遍历 10 槽位 */
-  for(i=0;i<BMS_CELL_COUNT;i++)
+  for(i=0;i<10;i++)
 	{
-	   Sum_val+= Batteryval[bms_cell_batteryval_index[i]];
+	   Sum_val+= Batteryval[i];
 	}
 	Batteryval[10] = Sum_val;
 	
@@ -737,18 +735,18 @@ void Cell_Battery_MAX_MIN(void)
 {
 	char i;
 	imaxp=iminp=0;
-	imax=imin=Batteryval[bms_cell_batteryval_index[0]];
-	for(i=0;i<BMS_CELL_COUNT;i++)
+	imax=imin=Batteryval[0];
+	for(i=0;i<10;i++)
 	{
-	if(Batteryval[bms_cell_batteryval_index[i]]>imax)
+	if(Batteryval[i]>imax)
         {
-            imax=Batteryval[bms_cell_batteryval_index[i]];
-            imaxp=bms_cell_batteryval_index[i];
+            imax=Batteryval[i];
+            imaxp=i;
         }
-        if(Batteryval[bms_cell_batteryval_index[i]]<imin)
+        if(Batteryval[i]<imin)
         {
-            imin=Batteryval[bms_cell_batteryval_index[i]];
-            iminp=bms_cell_batteryval_index[i];
+            imin=Batteryval[i];
+            iminp=i;
         }
 	}
   
@@ -958,7 +956,7 @@ void BMS_STA(void)
 /****************************************
 fuction:void readbqstate(void)
 description:读取报警信号值
-Parameters: UV_Alarm_flag?OV_Alarm_flag
+Parameters: UV_Alarm_flagOV_Alarm_flag
             SCD_Alarm_flag,OCD_Alarm_flag
 ******************************************/
 
