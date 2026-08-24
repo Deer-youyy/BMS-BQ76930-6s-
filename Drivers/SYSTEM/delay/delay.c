@@ -17,9 +17,9 @@ static void delay_dwt_init(void)
 }
 
 /**
-  * @brief  å¾®ç§’çº§å»¶æ—¶
-  * @param  nus å»¶æ—¶æ—¶é•¿ï¼ŒèŒƒå›´ï¼š0~233015
-  * @retval æ— 
+  * @brief  Î¢Ãë¼¶ÑÓÊ±
+  * @param  nus ÑÓÊ±Ê±³¤£¬·¶Î§£º0~233015
+  * @retval ÎŞ
   */
 void delay_us(uint32_t nus)
 {
@@ -41,9 +41,9 @@ void delay_us(uint32_t nus)
 }
 
 /**
-  * @brief  æ¯«ç§’çº§å»¶æ—¶
-  * @param  nms å»¶æ—¶æ—¶é•¿ï¼ŒèŒƒå›´ï¼š0~4294967295
-  * @retval æ— 
+  * @brief  ºÁÃë¼¶ÑÓÊ±
+  * @param  nms ÑÓÊ±Ê±³¤£¬·¶Î§£º0~4294967295
+  * @retval ÎŞ
   */
 void delay_ms(uint32_t nms)
 {
@@ -67,9 +67,9 @@ void delay_ms(uint32_t nms)
 }
  
 /**
-  * @brief  ç§’çº§å»¶æ—¶
-  * @param  ns å»¶æ—¶æ—¶é•¿ï¼ŒèŒƒå›´ï¼š0~4294967295
-  * @retval æ— 
+  * @brief  Ãë¼¶ÑÓÊ±
+  * @param  ns ÑÓÊ±Ê±³¤£¬·¶Î§£º0~4294967295
+  * @retval ÎŞ
   */
 void delay_s(uint32_t ns)
 {
@@ -80,9 +80,9 @@ void delay_s(uint32_t ns)
 }
 
 /**
-  * @brief  é‡å†™HAL_Delayå‡½æ•°
-  * @param  nms å»¶æ—¶æ—¶é•¿ï¼ŒèŒƒå›´ï¼š0~4294967295
-  * @retval æ— 
+  * @brief  ÖØĞ´HAL_Delayº¯Êı
+  * @param  nms ÑÓÊ±Ê±³¤£¬·¶Î§£º0~4294967295
+  * @retval ÎŞ
   */
 void HAL_Delay(uint32_t nms)
 {

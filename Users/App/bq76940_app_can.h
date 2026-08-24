@@ -29,16 +29,16 @@ struct BQ76940_AppCtx;
 void BQ76940_AppSendCanTelemetry(const struct BQ76940_AppCtx *ctx);
 
 /*
- * 0x305 ç»Ÿä¸€å¼‚å¸¸è¯Šæ–­å¸§ï¼š
+ * 0x305 Í³Ò»Òì³£Õï¶ÏÖ¡£º
  * - Runtime fault
  * - HwFault
- * å‘¨æœŸä»»åŠ¡ä¸­è°ƒç”¨ã€‚
+ * ÖÜÆÚÈÎÎñÖĞµ÷ÓÃ¡£
  */
 void BQ76940_AppSendFaultDiagCan(const struct BQ76940_AppCtx *ctx);
 
 /*
- * 0x305 å¯åŠ¨å¼‚å¸¸è¯Šæ–­å¸§ï¼š
- * main bring-up å¤±è´¥æ—¶è°ƒç”¨ã€‚
+ * 0x305 Æô¶¯Òì³£Õï¶ÏÖ¡£º
+ * main bring-up Ê§°ÜÊ±µ÷ÓÃ¡£
  */
 void BQ76940_AppSendBringUpFaultCan(const struct BQ76940_AppCtx *ctx,
                                     uint8_t main_ret,
