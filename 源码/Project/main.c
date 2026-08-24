@@ -22,7 +22,7 @@
 #include "timer.h"
 #include "stm32f10x_it.h"
 #include "can.h"
-#include "bms_config.h"
+#include "../Core/bms_config.h"
 /**
   * @file   main
   * @brief  Main program.

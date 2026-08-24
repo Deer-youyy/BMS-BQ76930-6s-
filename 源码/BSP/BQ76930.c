@@ -8,7 +8,7 @@
 #include "string.h"
 #include "IO_CTRL.h"
 #include "usart2.h"
-#include "bms_config.h"
+#include "../Core/bms_config.h"
 /*****************************
 file:BQData.c
 decription:
