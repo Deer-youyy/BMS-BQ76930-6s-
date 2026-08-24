@@ -3,6 +3,7 @@
 
 #include "bq76940_drv.h"
 #include "../../Core/bms_types.h"
+#include "bq_hal_measure.h"
 
 /*
  * BQ76940 采样快照数据

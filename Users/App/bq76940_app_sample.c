@@ -5,9 +5,6 @@
 #include "stdio.h"
 #include "string.h"
 
-/* 先按 4mΩ 试算 */
-#define BQ76940_RSENSE_UOHM   4000U
-
 /* 近零死区，避免 +1/-1 这种抖动误判
  * 当前先按 50mA 作为经验死区
  */
@@ -34,79 +31,103 @@ uint8_t BQ76940_AppSampleReadHw(const BQ76940_AdcCalib_t *calib,
                                 BQ76940_AppSampleData_t *sample)
 {
     uint8_t ret;
+    BqHalMeasure_t *mea;
+    BqHalAdcCalib_t ncalib;
+    BqHalMeasureSample_t m;
+    BqHalMeasureRawDiag_t raw;
 
-    if ((calib == 0) || (sample == 0))
+    if ((calib == 0U) || (sample == 0U))
     {
         return 1U;
     }
 
-    /*
-     * 1. 读取 9 节映射电压。
-     *
-     * 注意：
-     *   该函数内部会通过 I2C 访问 BQ76940。
-     *   因此调用本函数前，上层任务应已经拿到 I2C 总线互斥锁。
-     */
-    ret = BQ76940_ReadAllMappedCellVoltages9_mV(calib,
-                                                sample->cell_raw,
-                                                sample->cell_mV);
-    if (ret != 0U)
+    mea = BqHalMeasure_Get();
+    if (mea == 0U)
     {
-        return 11U;
+        /* 测量 Provider 未装配 */
+        return 1U;
     }
 
     /*
-     * 2. 触发一次 CC 1-shot 电流采样。
+     * 1. BQ76940_AdcCalib_t ? BqHalAdcCalib_t 无损映射（字段一一对应）。
+     *    校准由 bring-up 单次读取后传入，不为本路径新增 I2C 访问。
      */
-    ret = BQ76940_CC_StartOneShot();
+    ncalib.gain_uV_per_lsb = calib->gain_uV_per_lsb;
+    ncalib.offset_mV       = calib->offset_mV;
+
+    /*
+     * 2. 通过中性测量接口完成一次硬件读取：
+     *    Cell / CC / TS1 / SYS_STAT 仅读取一次，同时产出测量与诊断原始载荷。
+     *    原 BQ76940 寄存器读取与换算已在 Provider 内完成。
+     */
+    ret = BqHalMeasure_ReadSample(mea, &ncalib, &m, &raw);
     if (ret != 0U)
     {
-        BMS_LOG_ERROR("[SMP] CC start:%d\r\n", ret);
-        return 14U;
+        /* 将中性错误码映射回原阶段错误码与日志，保持诊断语义一致 */
+        switch (ret)
+        {
+            case BQHAL_MEASURE_ERR_CELL:
+                return 11U;
+            case BQHAL_MEASURE_ERR_CC_START:
+                BMS_LOG_ERROR("[SMP] CC start:%d\r\n", ret);
+                return 14U;
+            case BQHAL_MEASURE_ERR_CC_WAIT:
+                BMS_LOG_ERROR("[SMP] CC wait:%d\r\n", ret);
+                return 15U;
+            case BQHAL_MEASURE_ERR_CC_READ:
+                BMS_LOG_ERROR("[SMP] CC read:%d\r\n", ret);
+                return 16U;
+            case BQHAL_MEASURE_ERR_TS1:
+                BMS_LOG_ERROR("[SMP] TS1 read:%d\r\n", ret);
+                return 18U;
+            case BQHAL_MEASURE_ERR_SYS:
+                BMS_LOG_ERROR("[SMP] SYS read:%d\r\n", ret);
+                return 23U;
+            case BQHAL_MEASURE_ERR_STATS:
+                return 12U;
+            case BQHAL_MEASURE_ERR_CC_CONV:
+                BMS_LOG_ERROR("[SMP] CC conv:%d\r\n", ret);
+                return 17U;
+            case BQHAL_MEASURE_ERR_TS1_CONV:
+                BMS_LOG_ERROR("[SMP] TS1 conv:%d\r\n", ret);
+                return 19U;
+            case BQHAL_MEASURE_ERR_STATUS:
+                BMS_LOG_ERROR("[SMP] SYS mask:%d\r\n", ret);
+                return 24U;
+            default:
+                return 1U;
+        }
     }
 
     /*
-     * 3. 等待 CC_READY。
-     *
-     * 当前版本保持原来的逻辑：
-     *   等待期间仍然认为属于 BQ76940 电流采样事务的一部分。
+     * 3. 中性测量 → BQ76940 采样快照映射。
+     *    Print 所需的芯片专有原始字段由 RawDiag 回填，Print 保持不变。
      */
-    ret = BQ76940_CC_WaitReady(600U);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] CC wait:%d\r\n", ret);
-        return 15U;
-    }
+    memcpy(sample->cell_mV, m.cell_mV, sizeof(sample->cell_mV));
+    memcpy(sample->cell_raw, raw.cell_raw, sizeof(sample->cell_raw));
 
-    /*
-     * 4. 读取 CC 原始值。
-     */
-    ret = BQ76940_CC_ReadRaw(&sample->cc_raw);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] CC read:%d\r\n", ret);
-        return 16U;
-    }
+    sample->pack_total_mV = m.pack_total_mV;
 
-    /*
-     * 5. 读取 TS1 原始 ADC。
-     */
-    ret = BQ76940_ReadTS1Raw(&sample->ts1_raw_adc);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] TS1 read:%d\r\n", ret);
-        return 18U;
-    }
+    sample->cell_stats.max_mV        = m.max_mV;
+    sample->cell_stats.min_mV        = m.min_mV;
+    sample->cell_stats.diff_mV       = m.diff_mV;
+    sample->cell_stats.max_cell_label = m.max_label;
+    sample->cell_stats.min_cell_label = m.min_label;
 
-    /*
-     * 6. 读取 BQ76940 硬件故障状态 SYS_STAT。
-     */
-    ret = BQ76940_ProtectReadFaultStatus(&sample->sys_stat);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] SYS read:%d\r\n", ret);
-        return 23U;
-    }
+    sample->pack_current_mA  = m.pack_current_mA;
+    sample->pack_current_dir = BQ76940_AppJudgeCurrentDir(m.pack_current_mA);
+
+    sample->cc_raw.raw_hi = raw.cc_raw_hi;
+    sample->cc_raw.raw_lo = raw.cc_raw_lo;
+    sample->cc_raw.raw_u16 = (uint16_t)(((uint16_t)raw.cc_raw_hi << 8) |
+                                        (uint16_t)raw.cc_raw_lo);
+    sample->cc_raw.raw_s16 = raw.cc_raw_s16;
+
+    sample->ts1_raw_adc = raw.ts1_raw_adc;
+    sample->ts1_temp_dC = m.ts1_temp_dC;
+
+    sample->sys_stat          = raw.sys_stat;
+    sample->fault_mask_active = m.afe_status.fault_mask_active;
 
     return 0U;
 }
@@ -115,69 +136,15 @@ uint8_t BQ76940_AppSampleReadHw(const BQ76940_AdcCalib_t *calib,
 
 uint8_t BQ76940_AppSampleProcess(BQ76940_AppSampleData_t *sample)
 {
-    uint8_t ret;
-
-    if (sample == 0)
+    if (sample == 0U)
     {
         return 1U;
     }
 
     /*
-     * 1. 计算 Pack 总压。
-     * 这一步只依赖已经读取到的 cell_mV，不访问 I2C。
+     * 采样读取与换算已统一下沉到 BqHalMeasure Provider，
+     * 本函数保留为空实现以维持对外接口及 bms_tasks 调用关系不变。
      */
-    sample->pack_total_mV = BQ76940_CalcPackVoltage9_mV(sample->cell_mV);
-
-    /*
-     * 2. 统计最高单体、最低单体、压差。
-     */
-    ret = BQ76940_AnalyzeCellVoltages9(sample->cell_mV,
-                                       &sample->cell_stats);
-    if (ret != 0U)
-    {
-        return 12U;
-    }
-
-    /*
-     * 3. CC 原始值换算为 Pack 电流。
-     */
-    ret = BQ76940_CC_ConvertToCurrent_mA(sample->cc_raw.raw_s16,
-                                         BQ76940_RSENSE_UOHM,
-                                         &sample->pack_current_mA);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] CC conv:%d\r\n", ret);
-        return 17U;
-    }
-
-    /*
-     * 4. 判断电流方向：充电 / 放电 / 近零。
-     */
-    sample->pack_current_dir =
-        BQ76940_AppJudgeCurrentDir(sample->pack_current_mA);
-
-    /*
-     * 5. TS1 原始 ADC 换算为温度。
-     */
-    ret = BQ76940_ConvertTS1Temp_dC(sample->ts1_raw_adc,
-                                    &sample->ts1_temp_dC);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] TS1 conv:%d\r\n", ret);
-        return 19U;
-    }
-
-    /*
-     * 6. 从 SYS_STAT 中提取当前激活的硬件故障位。
-     */
-    ret = BQ76940_ProtectGetActiveFaultMask(sample->sys_stat,
-                                            &sample->fault_mask_active);
-    if (ret != 0U)
-    {
-        BMS_LOG_ERROR("[SMP] SYS mask:%d\r\n", ret);
-        return 24U;
-    }
-
     return 0U;
 }
 

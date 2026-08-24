@@ -46,6 +46,12 @@ typedef struct
     uint8_t dsg_fet; /* 放电 MOS 状态 */
 } BmsControlState_t;
 
+/* AFE 状态（硬件无关领域类型）*/
+typedef struct
+{
+    uint8_t fault_mask_active; /* 当前激活的硬件故障位（中性语义，数值同采样层现有 fault_mask_active） */
+} BmsAfeStatus_t;
+
 #ifdef __cplusplus
 }
 #endif
