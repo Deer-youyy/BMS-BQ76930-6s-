@@ -14,6 +14,8 @@
 #define BMS_HW_FAULT_TASK_STACK_WORDS      384U
 #define BMS_RUNTIME_TASK_STACK_WORDS  		 512U
 #define BMS_ALERT_SIM_TASK_STACK_WORDS     256U
+#define BMS_UART_SERVICE_TASK_STACK_WORDS  256U
+#define BMS_UART_HOST_TASK_STACK_WORDS     256U
 /* =========================
  * Task priority
  *
@@ -31,6 +33,8 @@
 #define BMS_GAUGE_TASK_PRIORITY            (tskIDLE_PRIORITY + 1U)
 #define BMS_AUX_TASK_PRIORITY              (tskIDLE_PRIORITY + 1U)
 #define BMS_ALERT_SIM_TASK_PRIORITY        (tskIDLE_PRIORITY + 1U)
+#define BMS_UART_SERVICE_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
+#define BMS_UART_HOST_TASK_PRIORITY      (tskIDLE_PRIORITY + 1U)
 
 /* =========================
  * Task period
@@ -39,11 +43,14 @@
 #define BMS_CAN_TASK_PERIOD_MS             1000U
 #define BMS_GAUGE_TASK_PERIOD_MS           1000U
 #define BMS_AUX_TASK_PERIOD_MS             1000U
+#define BMS_UART_HOST_TASK_PERIOD_MS     20U
 
 /* =========================
  * Feature switches
  * ========================= */
 #define BMS_ENABLE_GAUGE_TASK              0U
+
+#define BMS_UART_RX_QUEUE_LEN            8U
 
 /* =========================
  * BQ34Z100 refresh

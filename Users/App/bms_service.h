@@ -215,4 +215,21 @@ void    BMS_ServiceRuntimeAfeOffCommit(BMS_ServiceContext_t *svc,
 /* ---- Control ---- */
 uint8_t BMS_ServiceControlUpdate(BMS_ServiceContext_t *svc);
 
+
+/* ---- UART Host (Migration-005): neutral telemetry + command ---- */
+typedef struct
+{
+    uint16_t cell_mv[BMS_CELL_COUNT];
+    uint32_t pack_voltage;
+    int32_t  current;
+    int16_t  temperature;
+} BMS_UartTelemetry_t;
+
+/* Fill neutral telemetry from legacy app snapshot. */
+void BMS_ServiceGetUartTelemetry(BMS_ServiceContext_t *svc, BMS_UartTelemetry_t *tel);
+
+/* CHG/DSG command via BQ76930 Provider/HAL. Return 0 on success. */
+uint8_t BMS_ServiceUartSetChgEnable(BMS_ServiceContext_t *svc, uint8_t enable);
+uint8_t BMS_ServiceUartSetDsgEnable(BMS_ServiceContext_t *svc, uint8_t enable);
+
 #endif /* __BMS_SERVICE_H */

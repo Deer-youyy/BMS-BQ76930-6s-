@@ -1,111 +1,94 @@
 #include "bms_uart_host.h"
+#include "bms_service.h"
+#include "uart_service.h"
 #include "uart1.h"
-#include "bq76930_hal.h"
-#include "bq76940_app.h"
+#include "FreeRTOS.h"
+#include "queue.h"
 
 #include <stdio.h>
 #include <string.h>
 
-/*
- * UART1 上位机 Golden 协议 Adapter
- *
- * 下行帧（每周期从 uart1_rx_get_frame 取一帧）：
- *   帧格式 `01 cmd 55`（3 字节）
- *     0x02 开始发送数据（data_on=1）
- *     0x03 停止发送数据（data_on=0）
- *     0x04 打开 DSG
- *     0x05 关闭 DSG
- *     0x06 打开 CHG
- *     0x07 关闭 CHG
- *   CHG/DSG 通过 BQ76930 Provider 层接口执行（BQ76930_HalSetCHG / BQ76930_HalSetDSG）。
- *
- * 上行（按 Golden Update_val() 逐项复现，受 data_on 门控）：
- *   ASCII 文本，每行以 \r\n 结尾，仅使用 uart1_send_bytes。
- */
+#define UART_HOST_CMD_LEN 3U
 
-/* BQ76940_AppCtx_t 前置声明（禁止 include bq76940_app.h） */
-struct BQ76940_AppCtx;
-
-/* Adapter 内部状态（不透明） */
 typedef struct
 {
-    uint8_t data_on;   /* 0x02 开始周期发送, 0x03 停止 */
-    uint8_t init_sent; /* 每轮开头 MODE_CFG/CLR 是否已发送 */
+    uint8_t data_on;
+    uint8_t init_sent;
+    void   *queue;
 } BMS_UartHost_State_t;
 
 static BMS_UartHost_State_t s_host;
 
-/* Golden 6S 电压：cell_mV[] -> VC 标签（VC1/VC2/VC5/VC6/VC7/VC10） */
-static const char * const g_cell_labels[6] = {
-    "第一节", "第二节", "第三节", "第四节", "第五节", "第六节"
-};
-static const uint8_t g_cell_pos[6] = { 0U, 20U, 40U, 60U, 80U, 100U };
+/* Golden 6S cell labels / positions (VC1/VC2/VC5/VC6/VC7/VC10). */
+static const int g_cell_pos[6] = { 0, 20, 40, 60, 80, 100 };
 
-/* 发送一行 ASCII（以 \r\n 结尾） */
+void BMS_UartHost_Init(void)
+{
+    s_host.data_on = 0U;
+    s_host.init_sent = 0U;
+    s_host.queue = NULL;
+}
+
+void BMS_UartHost_BindQueue(void *queue_handle)
+{
+    s_host.queue = queue_handle;
+}
+
 static void BMS_UartHost_TxLine(const char *s)
 {
     uint16_t len = (uint16_t)strlen(s);
     uart1_send_bytes((const uint8_t *)s, len);
 }
 
-void BMS_UartHost_Init(void)
+uint8_t BMS_UartHost_RxProcess(BMS_ServiceContext_t *svc)
 {
-    s_host.data_on = 0U;
-    s_host.init_sent = 0U;
-}
+    UART_Frame_t frame;
+    uint8_t cmd;
 
-uint8_t BMS_UartHost_RxProcess(struct BQ76940_AppCtx *ctx)
-{
-    uint8_t frm[8];
-    uint16_t n;
-
-    (void)ctx;
-
-    n = uart1_rx_get_frame(frm, sizeof(frm));
-    if (n < 3U)
+    if (s_host.queue == NULL)
     {
         return 0U;
     }
 
-    if ((frm[0] != 0x01U) || (frm[2] != 0x55U))
+    if (xQueueReceive((QueueHandle_t)s_host.queue, &frame, 0U) != pdTRUE)
     {
         return 0U;
     }
 
-    switch (frm[1])
+    if ((frame.len < UART_HOST_CMD_LEN) ||
+        (frame.data[0] != 0x01U) ||
+        (frame.data[2] != 0x55U))
     {
-        case 0x02U: /* 开始发送数据 */
-            s_host.data_on = 1U;
-            s_host.init_sent = 0U;
-            break;
-        case 0x03U: /* 停止发送数据 */
-            s_host.data_on = 0U;
-            break;
-        case 0x04U: /* 打开 DSG */
-            (void)BQ76930_HalSetDSG(1U);
-            break;
-        case 0x05U: /* 关闭 DSG */
-            (void)BQ76930_HalSetDSG(0U);
-            break;
-        case 0x06U: /* 打开 CHG */
-            (void)BQ76930_HalSetCHG(1U);
-            break;
-        case 0x07U: /* 关闭 CHG */
-            (void)BQ76930_HalSetCHG(0U);
-            break;
-        default:
-            break;
+        return 0U;
     }
 
+    cmd = frame.data[1];
+    switch (cmd)
+    {
+        case 0x02U: s_host.data_on = 1U; s_host.init_sent = 0U; break;
+        case 0x03U: s_host.data_on = 0U; break;
+        case 0x04U: (void)BMS_ServiceUartSetDsgEnable(svc, 1U); break;
+        case 0x05U: (void)BMS_ServiceUartSetDsgEnable(svc, 0U); break;
+        case 0x06U: (void)BMS_ServiceUartSetChgEnable(svc, 1U); break;
+        case 0x07U: (void)BMS_ServiceUartSetChgEnable(svc, 0U); break;
+        default: break;
+    }
     return 1U;
 }
 
-uint8_t BMS_UartHost_TxPeriodic(struct BQ76940_AppCtx *ctx)
+static void BMS_UartHost_EmitHeader(void)
+{
+    BMS_UartHost_TxLine("MODE_CFG(1);DIR(1);FSIMG(2097152,0,0,220,176,0);\r\n");
+    BMS_UartHost_TxLine("CLR(61);\r\n");
+}
+
+uint8_t BMS_UartHost_TxPeriodic(BMS_ServiceContext_t *svc)
 {
     char buf[64];
+    BMS_UartTelemetry_t tel;
     uint8_t i;
 
-    if (ctx == 0)
+    if (svc == NULL)
     {
         return 0U;
     }
@@ -115,44 +98,37 @@ uint8_t BMS_UartHost_TxPeriodic(struct BQ76940_AppCtx *ctx)
         return 0U;
     }
 
-    /* 每轮开头仅一次：MODE_CFG + CLR */
     if (s_host.init_sent == 0U)
     {
-        BMS_UartHost_TxLine("MODE_CFG(1);DIR(1);FSIMG(2097152,0,0,220,176,0);\r\n");
-        BMS_UartHost_TxLine("CLR(61);\r\n");
+        BMS_UartHost_EmitHeader();
         s_host.init_sent = 1U;
     }
 
-    /* 6 节电压，偏移 0,20,40,60,80,100 */
-    for (i = 0U; i < 6U; i++)
+    BMS_ServiceGetUartTelemetry(svc, &tel);
+
+    for (i = 0U; i < BMS_CELL_COUNT; i++)
     {
         (void)snprintf(buf, sizeof(buf),
-                       "DCV16(0,%u,'%s电压:%dmV',3);\r\n",
-                       (unsigned)g_cell_pos[i],
-                       g_cell_labels[i],
-                       (int)ctx->cell_mV[i]);
+                       "DCV16(0,%d,'CELL%d:%umV',3);\r\n",
+                       g_cell_pos[i], i + 1, (unsigned)tel.cell_mv[i]);
         BMS_UartHost_TxLine(buf);
     }
 
     BMS_UartHost_TxLine("CLR(61);\r\n");
 
-    /* 总电压（mV） */
-    (void)snprintf(buf, sizeof(buf), "DCV16(0,00,'总电压:%dmV',3);\r\n",
-                   (int)ctx->pack_total_mV);
+    (void)snprintf(buf, sizeof(buf), "DCV16(0,00,'PACK:%umV',3);\r\n",
+                   (unsigned)tel.pack_voltage);
     BMS_UartHost_TxLine(buf);
 
-    /* SOC：无专用字段，Golden SOC 在 Batteryval[32]，取 0 */
-    (void)snprintf(buf, sizeof(buf), "DCV16(0,20,'电池SOC为:%d%',3);\r\n", 0);
+    (void)snprintf(buf, sizeof(buf), "DCV16(0,20,'SOC:%d%%',3);\r\n", 0);
     BMS_UartHost_TxLine(buf);
 
-    /* 温度：ts1_temp_dC / 100.0 -> 摄氏度 */
-    (void)snprintf(buf, sizeof(buf), "DCV16(0,40,'电池温度为:%.2f℃',3);\r\n",
-                   (double)ctx->ts1_temp_dC / 100.0);
+    (void)snprintf(buf, sizeof(buf), "DCV16(0,40,'TEMP:%.2fC',3);\r\n",
+                   (double)tel.temperature / 100.0);
     BMS_UartHost_TxLine(buf);
 
-    /* 电流（mA） */
-    (void)snprintf(buf, sizeof(buf), "DCV16(0,60,'电流:%dmA',3);\r\n",
-                   (int)ctx->pack_current_mA);
+    (void)snprintf(buf, sizeof(buf), "DCV16(0,60,'AMP:%dmA',3);\r\n",
+                   (int)tel.current);
     BMS_UartHost_TxLine(buf);
 
     BMS_UartHost_TxLine("DCV24(0,20,'');\r\n");

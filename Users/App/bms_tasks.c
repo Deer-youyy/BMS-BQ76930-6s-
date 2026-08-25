@@ -17,6 +17,7 @@
 #include "bq76940_alert_sim.h"
 #include "bq76930_balance.h"
 #include "bms_uart_host.h"
+#include "uart_service.h"
 
 #define BMS_TEST_FAKE_HW_FAULT_SYS_STAT 0x03U
 
@@ -35,6 +36,7 @@ static BQ34Z100_AppCtx_t g_bq34z100_ctx;
 static volatile uint8_t g_afe_write_inhibit = 0U;
 
 static QueueHandle_t g_can_rx_queue = NULL;
+static QueueHandle_t g_uart_frame_queue = NULL;
 
 /*
  * BMS 上下文互斥锁：
@@ -60,6 +62,8 @@ static void BMS_ProtectTask(void *argument);
 static void BMS_BalanceTask(void *argument);
 static void BMS_ControlTask(void *argument);
 static void BMS_CANTask(void *argument);
+static void BMS_UartServiceTask(void *argument);
+static void BMS_UartHostTask(void *argument);
 static void BMS_RuntimeTask(void *argument);
 static void BMS_HwFaultTask(void *argument);
 
@@ -246,6 +250,13 @@ BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc, BQ76940_AppCtx_t *app)
         return result;
     }
 
+    g_uart_frame_queue = xQueueCreate(BMS_UART_RX_QUEUE_LEN, sizeof(UART_Frame_t));
+    if (g_uart_frame_queue == NULL)
+    {
+        BMS_LOG_ERROR("[RTOS] UART frame queue fail\r\n");
+        return pdFAIL;
+    }
+    UART_Service_Init((void *)g_uart_frame_queue);
     result = xTaskCreate(BMS_CANTask,
                          "BMS_CAN",
                          BMS_CAN_TASK_STACK_WORDS,
@@ -255,6 +266,31 @@ BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc, BQ76940_AppCtx_t *app)
     if (result != pdPASS)
     {
         BMS_LOG_ERROR("[RTOS] CAN task fail\r\n");
+        return result;
+    }
+    /* UART Service (prio one below CAN) */
+    result = xTaskCreate(BMS_UartServiceTask,
+                         "UART_Service",
+                         BMS_UART_SERVICE_TASK_STACK_WORDS,
+                         NULL,
+                         BMS_UART_SERVICE_TASK_PRIORITY,
+                         NULL);
+    if (result != pdPASS)
+    {
+        BMS_LOG_ERROR("[RTOS] UART service task fail\r\n");
+        return result;
+    }
+
+    /* UART Host (prio lowest business) */
+    result = xTaskCreate(BMS_UartHostTask,
+                         "UART_Host",
+                         BMS_UART_HOST_TASK_STACK_WORDS,
+                         svc,
+                         BMS_UART_HOST_TASK_PRIORITY,
+                         NULL);
+    if (result != pdPASS)
+    {
+        BMS_LOG_ERROR("[RTOS] UART host task fail\r\n");
         return result;
     }
 
@@ -664,15 +700,10 @@ static void BMS_CANTask(void *argument)
 
     last_tx_tick = xTaskGetTickCount();
 
-    BMS_UartHost_Init();
 
     for (;;)
     {
-        /*
-         * 0. UART host: rx frame from host + periodic TX to host
-         */
-        BMS_UartHost_RxProcess(&rx_snapshot);
-        BMS_UartHost_TxPeriodic(&tx_snapshot);
+
         /*
          * 1. 先处理 CAN RX 队列
          * 这里先只取出来，不做业务控制。
@@ -1387,4 +1418,27 @@ static uint8_t BMS_HwFaultApplyHwWithRetry(BMS_OcdScdRequest_t *req)
         }
     }
     return ret;
+}
+
+
+/* ---- Migration-005: UART Service + Host tasks ---- */
+static void BMS_UartServiceTask(void *argument)
+{
+    (void)argument;
+    UART_Service_Task(NULL);
+}
+
+static void BMS_UartHostTask(void *argument)
+{
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
+
+    BMS_UartHost_Init();
+    BMS_UartHost_BindQueue((void *)g_uart_frame_queue);
+
+    for (;;)
+    {
+        (void)BMS_UartHost_RxProcess(svc);
+        (void)BMS_UartHost_TxPeriodic(svc);
+        vTaskDelay(pdMS_TO_TICKS(BMS_UART_HOST_TASK_PERIOD_MS));
+    }
 }

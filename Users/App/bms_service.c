@@ -735,3 +735,35 @@ uint8_t BMS_ServiceHwFaultReadSysStat(BMS_ServiceContext_t *svc, uint8_t *sys_st
 
     return BQ76930_HalReadSysStat(sys_stat);
 }
+
+void BMS_ServiceGetUartTelemetry(BMS_ServiceContext_t *svc, BMS_UartTelemetry_t *tel)
+{
+    BQ76940_AppCtx_t *legacy;
+    uint8_t i;
+
+    if ((svc == NULL) || (svc->legacy == NULL) || (tel == NULL))
+    {
+        return;
+    }
+    legacy = svc->legacy;
+
+    for (i = 0U; i < BMS_CELL_COUNT; i++)
+    {
+        tel->cell_mv[i] = legacy->cell_mV[i];
+    }
+    tel->pack_voltage = legacy->pack_total_mV;
+    tel->current      = legacy->pack_current_mA;
+    tel->temperature  = legacy->ts1_temp_dC;
+}
+
+uint8_t BMS_ServiceUartSetChgEnable(BMS_ServiceContext_t *svc, uint8_t enable)
+{
+    (void)svc;
+    return BQ76930_HalSetCHG(enable != 0U);
+}
+
+uint8_t BMS_ServiceUartSetDsgEnable(BMS_ServiceContext_t *svc, uint8_t enable)
+{
+    (void)svc;
+    return BQ76930_HalSetDSG(enable != 0U);
+}
