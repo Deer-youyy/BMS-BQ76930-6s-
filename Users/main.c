@@ -176,6 +176,7 @@ int main(void)
 {
     uint8_t ret = 0;
     static BQ76940_AppCtx_t app;
+    BMS_ServiceContext_t *svc;
     BaseType_t result;
 
     HAL_Init();
@@ -219,7 +220,8 @@ int main(void)
         BMS_LOG_RUNTIME("[MAIN] low power\r\n");
     }
 
-    result = BMS_TasksCreate(&app);
+    svc = BMS_ServiceInit(&app);
+    result = BMS_TasksCreate(svc, &app);
     /* 3. 创建最小任务框架 */
     if (result != pdPASS)
     {

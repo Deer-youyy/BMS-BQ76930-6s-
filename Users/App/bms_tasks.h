@@ -2,9 +2,12 @@
 #define __BMS_TASKS_H
 
 #include "FreeRTOS.h"
-#include "bq76940_app.h"
+#include "bms_service.h"
 
-BaseType_t BMS_TasksCreate(BQ76940_AppCtx_t *app);
+struct BQ76940_AppCtx;
+
+BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc,
+                           struct BQ76940_AppCtx *app);
 
 void BMS_HwFaultNotifyFromISR(void);
 #endif

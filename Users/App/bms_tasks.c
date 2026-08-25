@@ -6,6 +6,7 @@
 #include "can_drv.h"
 
 #include "bms_tasks.h"
+#include "bq76940_app.h"
 
 #include "stdio.h"
 #include "bms_config.h"
@@ -71,7 +72,7 @@ static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat);
 static uint8_t BMS_HwFaultApplyHwWithRetry(const BQ76940_OcdScdRequest_t *req);
 
 #if (BMS_TEST_SAFE_OFF_READBACK_ENABLE != 0U)
-static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app);
+static void BMS_RuntimeSafeOffReadback(BMS_ServiceContext_t *svc);
 #endif
 
 #if (BMS_ENABLE_GAUGE_TASK != 0U)
@@ -103,11 +104,11 @@ void vApplicationMallocFailedHook(void)
     }
 }
 
-BaseType_t BMS_TasksCreate(BQ76940_AppCtx_t *app)
+BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc, BQ76940_AppCtx_t *app)
 {
     BaseType_t result;
 
-    if (app == NULL)
+    if ((svc == NULL) || (app == NULL))
     {
         return pdFAIL;
     }
@@ -176,7 +177,7 @@ BaseType_t BMS_TasksCreate(BQ76940_AppCtx_t *app)
     result = xTaskCreate(BMS_SampleTask,
                          "BMS_Sample",
                          BMS_SAMPLE_TASK_STACK_WORDS,
-                         app,
+                         svc,
                          BMS_SAMPLE_TASK_PRIORITY,
                          NULL);
     if (result != pdPASS)
@@ -223,7 +224,7 @@ BaseType_t BMS_TasksCreate(BQ76940_AppCtx_t *app)
     result = xTaskCreate(BMS_ControlTask,
                          "BMS_Control",
                          BMS_CONTROL_TASK_STACK_WORDS,
-                         app,
+                         svc,
                          BMS_CONTROL_TASK_PRIORITY,
                          NULL);
     if (result != pdPASS)
@@ -235,7 +236,7 @@ BaseType_t BMS_TasksCreate(BQ76940_AppCtx_t *app)
     result = xTaskCreate(BMS_RuntimeTask,
                          "BMS_Runtime",
                          BMS_RUNTIME_TASK_STACK_WORDS,
-                         app,
+                         svc,
                          BMS_RUNTIME_TASK_PRIORITY,
                          NULL);
     if (result != pdPASS)
@@ -303,13 +304,12 @@ BaseType_t BMS_TasksCreate(BQ76940_AppCtx_t *app)
 
 static void BMS_SampleTask(void *argument)
 {
-    BQ76940_AppCtx_t *app = (BQ76940_AppCtx_t *)argument;
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
 
     uint8_t ret;
     uint8_t fault_code;
     uint8_t fault_stage;
     uint8_t enter_fault;
-    uint8_t recovered;
     uint8_t notify_protect = 0U;
 
 #if (BMS_TEST_FORCE_RUNTIME_FAULT != 0U)
@@ -318,7 +318,7 @@ static void BMS_SampleTask(void *argument)
 #endif
 
     BQ76930_AdcCalib_t calib_snapshot;
-    BQ76940_AppSampleData_t sample;
+    BMS_SampleData_t sample;
 
     for (;;)
     {
@@ -326,7 +326,6 @@ static void BMS_SampleTask(void *argument)
         fault_code = BQ76940_RT_FAULT_NONE;
         fault_stage = BQ76940_RT_STAGE_NONE;
         enter_fault = 0U;
-        recovered = 0U;
         notify_protect = 0U;
 
 #if (BMS_TEST_FORCE_RUNTIME_FAULT != 0U)
@@ -347,7 +346,7 @@ static void BMS_SampleTask(void *argument)
          */
         if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
         {
-            calib_snapshot = app->calib;
+            BMS_ServiceGetCalib(svc, &calib_snapshot);
             xSemaphoreGive(g_bms_ctx_mutex);
         }
         else
@@ -365,7 +364,7 @@ static void BMS_SampleTask(void *argument)
             if (xSemaphoreTake(g_i2c_bus_mutex,
                                pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
             {
-                ret = BQ76940_AppSampleReadHw(&calib_snapshot, &sample);
+                ret = BMS_ServiceSampleReadHw(&calib_snapshot, &sample);
 
                 xSemaphoreGive(g_i2c_bus_mutex);
 
@@ -404,7 +403,7 @@ static void BMS_SampleTask(void *argument)
          */
         if (ret == 0U)
         {
-            ret = BQ76940_AppSampleProcess(&sample);
+            ret = BMS_ServiceSampleProcess(&sample);
             if (ret != 0U)
             {
                 fault_code = BQ76940_RT_FAULT_SAMPLE_PROCESS;
@@ -420,22 +419,9 @@ static void BMS_SampleTask(void *argument)
         {
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                ret = BQ76940_AppSampleCommit(app, &sample);
+                ret = BMS_ServiceSampleCommit(svc, &sample, &notify_protect);
 
-                if (ret == 0U)
-                {
-                    BQ76940_AppRuntimeDiagRecordSampleOk(app, &recovered);
-
-                    /*
-                     * 未处于 runtime fault 时，才继续主业务链。
-                     * 如果刚刚自动恢复，也允许继续。
-                     */
-                    if (BQ76940_AppRuntimeDiagIsFaultActive(app) == 0U)
-                    {
-                        notify_protect = 1U;
-                    }
-                }
-                else
+                if (ret != 0U)
                 {
                     fault_code = BQ76940_RT_FAULT_SAMPLE_COMMIT;
                     fault_stage = BQ76940_RT_STAGE_SAMPLE_COMMIT;
@@ -463,7 +449,7 @@ static void BMS_SampleTask(void *argument)
         {
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                BQ76940_AppRuntimeDiagRecordSampleFail(app,
+                BMS_ServiceSampleReportFail(svc,
                                                        fault_code,
                                                        fault_stage,
                                                        ret,
@@ -500,7 +486,7 @@ static void BMS_SampleTask(void *argument)
 
 static void BMS_RuntimeTask(void *argument)
 {
-    BQ76940_AppCtx_t *app = (BQ76940_AppCtx_t *)argument;
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
 
     for (;;)
     {
@@ -521,7 +507,7 @@ static void BMS_RuntimeTask(void *argument)
              */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                BQ76940_AppRuntimeDiagTakeSafeOffRequest(app, &need_safe_off);
+                BMS_ServiceRuntimeTakeSafeOff(svc, &need_safe_off);
 
                 xSemaphoreGive(g_bms_ctx_mutex);
             }
@@ -551,7 +537,7 @@ static void BMS_RuntimeTask(void *argument)
              */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                (void)BQ76940_AppForceExternalOff(app);
+                (void)BMS_ServiceRuntimeForceExternalOff(svc);
                 BMS_LOG_RUNTIME("[RT] ext off\r\n");
 
                 xSemaphoreGive(g_bms_ctx_mutex);
@@ -591,7 +577,7 @@ static void BMS_RuntimeTask(void *argument)
                 if (xSemaphoreTake(g_i2c_bus_mutex,
                                    pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
                 {
-                    safe_off_result = BQ76940_AppForceAfeOffHw();
+                    safe_off_result = BMS_ServiceRuntimeAfeOffHw();
 
                     xSemaphoreGive(g_i2c_bus_mutex);
                 }
@@ -619,18 +605,7 @@ static void BMS_RuntimeTask(void *argument)
                      * - CELLBAL 写成功，才清 bal_active / bal_target_label
                      * - FET 写成功，才提交相关执行状态
                      */
-                    BQ76940_AppForceAfeOffCommit(app, safe_off_result);
-
-                    /*
-                     * 提交 Safe-Off 结果。
-                     *
-                     * RuntimeDiag 内部根据失败次数决定：
-                     * - retry_allowed = 1：允许继续快速重试
-                     * - retry_allowed = 0：达到上限，进入故障保持
-                     */
-                    BQ76940_AppRuntimeDiagCommitSafeOffResult(app,
-                                                              safe_off_result,
-                                                              &retry_allowed);
+                    BMS_ServiceRuntimeAfeOffCommit(svc, safe_off_result, &retry_allowed);
 
                     xSemaphoreGive(g_bms_ctx_mutex);
                 }
@@ -661,7 +636,7 @@ static void BMS_RuntimeTask(void *argument)
                      (retry_allowed != 0U));
 
 #if (BMS_TEST_SAFE_OFF_READBACK_ENABLE != 0U)
-            BMS_RuntimeSafeOffReadback(app);
+            BMS_RuntimeSafeOffReadback(svc);
 #endif
 
             /*
@@ -1073,7 +1048,7 @@ static void BMS_BalanceTask(void *argument)
 
 static void BMS_ControlTask(void *argument)
 {
-    BQ76940_AppCtx_t *app = (BQ76940_AppCtx_t *)argument;
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
 
     for (;;)
     {
@@ -1094,7 +1069,7 @@ static void BMS_ControlTask(void *argument)
              */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                ret = BQ76940_AppControlUpdate(app);
+                ret = BMS_ServiceControlUpdate(svc);
 
                 xSemaphoreGive(g_bms_ctx_mutex);
             }
@@ -1202,7 +1177,7 @@ static uint8_t BMS_AfeWriteIsInhibited(void)
 }
 
 #if (BMS_TEST_SAFE_OFF_READBACK_ENABLE != 0U)
-static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
+static void BMS_RuntimeSafeOffReadback(BMS_ServiceContext_t *svc)
 {
     BQ76930_CellBalRegs_t cellbal = {0xFFU, 0xFFU};
     uint8_t sys_ctrl2 = 0xFFU;
@@ -1216,6 +1191,8 @@ static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
     uint8_t inhibited;
     uint8_t readback_pass;
 
+    (void)svc;
+
     /*
      * I2C 读回与 ctx 状态快照分开加锁，避免锁嵌套。
      * 本函数只验证并打印，不修改 Safe-Off 正式结果。
@@ -1228,11 +1205,7 @@ static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
         xSemaphoreGive(g_i2c_bus_mutex);
     }
 
-    if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
-    {
-        fault_active = app->runtime_diag.fault_active;
-        xSemaphoreGive(g_bms_ctx_mutex);
-    }
+    fault_active = BMS_AfeWriteIsInhibited();
 
     chg_en = BQ76200_CHG_EN_ReadBack();
     dsg_en = BQ76200_DSG_EN_ReadBack();
