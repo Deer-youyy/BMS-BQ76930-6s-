@@ -18,6 +18,9 @@ extern "C" {
 /* 目标硬件事实：BQ76930 / 6S，6 串逻辑单体 */
 #define BMS_CELL_COUNT 6U
 
+/* BQ76200 legacy exec layer: 0=isolated (no BQ76200 hw, CHG/DSG via BQ76930 SYS_CTRL2) */
+#define BQ76200_LEGACY_ENABLE 0U
+
 /* 采样测量快照（硬件无关领域类型）*/
 typedef struct
 {

@@ -34,8 +34,8 @@ uint8_t CAN_DrvInit(void)
      */
     hcan.Init.Prescaler = 4;
     hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
-    hcan.Init.TimeSeg1 = CAN_BS1_13TQ;
-    hcan.Init.TimeSeg2 = CAN_BS2_4TQ;
+    hcan.Init.TimeSeg1 = CAN_BS1_9TQ;
+    hcan.Init.TimeSeg2 = CAN_BS2_8TQ;
 
     /*
      * 4. CAN 工作特性配置
@@ -236,6 +236,60 @@ uint8_t CAN_DrvSendStd(uint16_t std_id, const uint8_t *data, uint8_t dlc)
     return 0;
 }
 
+uint8_t CAN_DrvSendExt(uint32_t ext_id, const uint8_t *data, uint8_t dlc)
+{
+    CAN_TxHeaderTypeDef tx_header;
+    uint32_t tx_mailbox;
+    uint32_t tick_start;
+
+    if (can_ready == 0U)
+    {
+        return 1;
+    }
+
+    if (data == 0)
+    {
+        return 2;
+    }
+
+    if (ext_id > 0x1FFFFFFFU)
+    {
+        return 3;
+    }
+
+    if (dlc > 8U)
+    {
+        return 4;
+    }
+
+    tx_header.StdId = 0U;
+    tx_header.ExtId = ext_id;
+    tx_header.IDE = CAN_ID_EXT;
+    tx_header.RTR = CAN_RTR_DATA;
+    tx_header.DLC = dlc;
+    tx_header.TransmitGlobalTime = DISABLE;
+
+    tick_start = HAL_GetTick();
+
+    while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0U)
+    {
+        if ((HAL_GetTick() - tick_start) > 10U)
+        {
+            return 5;
+        }
+    }
+
+    if (HAL_CAN_AddTxMessage(&hcan,
+                             &tx_header,
+                             (uint8_t *)data,
+                             &tx_mailbox) != HAL_OK)
+    {
+        return 6;
+    }
+
+    return 0;
+}
+
 void CAN_DrvRxIrqHandler(void)
 {
     HAL_CAN_IRQHandler(&hcan);
@@ -259,6 +313,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_arg)
     while (HAL_CAN_GetRxFifoFillLevel(hcan_arg, CAN_RX_FIFO0) > 0U)
     {
         frame.std_id = 0U;
+        frame.ext_id = 0U;
         frame.dlc = 0U;
         frame.data[0] = 0U;
         frame.data[1] = 0U;
@@ -278,7 +333,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_arg)
          * V1 只接收标准数据帧。
          * 扩展帧 / 远程帧直接丢弃。
          */
-        if ((rx_header.IDE != CAN_ID_STD) || (rx_header.RTR != CAN_RTR_DATA))
+        if (rx_header.RTR != CAN_RTR_DATA)
         {
             continue;
         }
@@ -288,7 +343,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_arg)
             continue;
         }
 
-        frame.std_id = (uint16_t)rx_header.StdId;
+        if (rx_header.IDE == CAN_ID_STD)
+        {
+            frame.std_id = (uint16_t)rx_header.StdId;
+        }
+        else
+        {
+            frame.ext_id = rx_header.ExtId;
+        }
         frame.dlc = (uint8_t)rx_header.DLC;
 
         if (g_can_rx_queue != NULL)

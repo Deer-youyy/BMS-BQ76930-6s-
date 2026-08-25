@@ -34,13 +34,19 @@ uint8_t BQ76940_AppControlUpdate(BQ76940_AppCtx_t *ctx)
     /*
      * ???? BQ76200 ??§Ó?????
      */
+#if (BQ76200_LEGACY_ENABLE != 0U)
     ret = BQ76200_ExecUpdate(&ctx->bq76200_exec, &exec_input);
     if (ret != 0U)
     {
         BMS_LOG_ERROR("[CTRL] exec:%d\r\n", ret);
         return 31U;
     }
+#else
+    /* no BQ76200: control via BQ76930 HalSetCHG/HalSetDSG */
+    (void)exec_input;
+    ret = 0U;
+#endif
 
-    return 0U;
+    return ret;
 }
 

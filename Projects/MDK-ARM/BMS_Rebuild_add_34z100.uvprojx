@@ -453,6 +453,11 @@
               <FilePath>..\..\Users\App\bms_service.c</FilePath>
             </File>
             <File>
+              <FileName>bms_uart_host.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\Users\App\bms_uart_host.c</FilePath>
+            </File>
+            <File>
               <FileName>bq76200_exec.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\Drivers\BSP\bq76200_exec\bq76200_exec.c</FilePath>

@@ -85,7 +85,9 @@ void BQ76940_AppInitDefaultConfig(BQ76940_AppCtx_t *ctx)
     BQ76930_ClearCellBalRegs(&ctx->cellbal_rd);
 
     /* BQ76200 执行层初始化 */
+#if (BQ76200_LEGACY_ENABLE != 0U)
     BQ76200_ExecInit(&ctx->bq76200_exec);
+#endif
 
     /* 自动均衡第一版参数 */
     ctx->bal_cfg.diff_enter_mV = 80;       /* 压差 >= 80mV 开始均衡 */
@@ -151,7 +153,9 @@ uint8_t BQ76940_AppForceExternalOff(BQ76940_AppCtx_t *ctx)
      * - 只操作 BQ76200 GPIO 执行层状态
      * - RuntimeTask 被唤醒后应优先执行它
      */
+#if (BQ76200_LEGACY_ENABLE != 0U)
     BQ76200_ExecForceOff(&ctx->bq76200_exec);
+#endif
 
     return 0U;
 }

@@ -16,6 +16,7 @@
 #include "bq76200_exec_port.h"
 #include "bq76940_alert_sim.h"
 #include "bq76930_balance.h"
+#include "bms_uart_host.h"
 
 #define BMS_TEST_FAKE_HW_FAULT_SYS_STAT 0x03U
 
@@ -663,8 +664,15 @@ static void BMS_CANTask(void *argument)
 
     last_tx_tick = xTaskGetTickCount();
 
+    BMS_UartHost_Init();
+
     for (;;)
     {
+        /*
+         * 0. UART host: rx frame from host + periodic TX to host
+         */
+        BMS_UartHost_RxProcess(&rx_snapshot);
+        BMS_UartHost_TxPeriodic(&tx_snapshot);
         /*
          * 1. 先处理 CAN RX 队列
          * 这里先只取出来，不做业务控制。
@@ -695,9 +703,14 @@ static void BMS_CANTask(void *argument)
             {
                 tx_snapshot = *app;
                 xSemaphoreGive(g_bms_ctx_mutex);
-                BQ76940_AppSendCanTelemetry(&tx_snapshot);
-                BQ76940_AppSendFaultDiagCan(&tx_snapshot);
-                BQ76940_AppSendBalanceStatusCan(&tx_snapshot);
+                {
+                    uint8_t g_idx;
+                    for (g_idx = 1U; g_idx <= 7U; g_idx++)
+                    {
+                        BQ76940_AppSendGoldenFrame(&tx_snapshot, g_idx);
+                        vTaskDelay(pdMS_TO_TICKS(5U));
+                    }
+                }
             }
             last_tx_tick = now_tick;
         }
@@ -1079,10 +1092,17 @@ static void BMS_RuntimeSafeOffReadback(BMS_ServiceContext_t *svc)
 
     fault_active = BMS_AfeWriteIsInhibited();
 
+#if (BQ76200_LEGACY_ENABLE != 0U)
     chg_en = BQ76200_CHG_EN_ReadBack();
     dsg_en = BQ76200_DSG_EN_ReadBack();
     cp_en = BQ76200_CP_EN_ReadBack();
     pchg_en = BQ76200_PCHG_EN_ReadBack();
+#else
+    chg_en = (uint8_t)((sys_ctrl2 & 0x01U) ? 1U : 0U);
+    dsg_en = (uint8_t)((sys_ctrl2 & 0x02U) ? 1U : 0U);
+    cp_en = 0U;
+    pchg_en = 0U;
+#endif
     inhibited = BMS_AfeWriteIsInhibited();
 
     readback_pass =

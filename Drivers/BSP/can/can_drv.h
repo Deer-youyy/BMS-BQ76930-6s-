@@ -39,6 +39,7 @@
 typedef struct
 {
     uint16_t std_id;
+    uint32_t ext_id;
     uint8_t  dlc;
     uint8_t  data[8];
 } CAN_DrvRxFrame_t;
@@ -58,6 +59,7 @@ uint8_t CAN_DrvIsReady(void);
  * 发送标准帧
  */
 uint8_t CAN_DrvSendStd(uint16_t std_id, const uint8_t *data, uint8_t dlc);
+uint8_t CAN_DrvSendExt(uint32_t ext_id, const uint8_t *data, uint8_t dlc);
 
 /*
  * 注册 CAN RX 队列

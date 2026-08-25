@@ -185,6 +185,7 @@ int main(void)
     led_init();
     uart1_init(115200);
     IO_CTRL_Init();
+    BoardPower_Enable();
     SoftI2C1_Init();
     BQ76940_AlertSimInit();
 

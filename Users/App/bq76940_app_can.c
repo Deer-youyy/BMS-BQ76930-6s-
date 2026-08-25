@@ -1,7 +1,93 @@
 #include "bq76940_app.h"
 #include "bq76940_app_can.h"
+#include <string.h>
 
 //#include "can_drv.h"
+
+static void BQ76940_AppBuildGoldenFrame(const BQ76940_AppCtx_t *ctx, uint8_t idx, uint8_t buf[8])
+{
+    uint8_t i;
+
+    for (i = 0U; i < 8U; i++)
+    {
+        buf[i] = 0U;
+    }
+
+    buf[0] = 0xAAU;
+    buf[1] = idx;
+
+    switch (idx)
+    {
+        case 1U: /* VC1 VC2 */
+            buf[2] = (uint8_t)(ctx->cell_mV[0] >> 8);
+            buf[3] = (uint8_t)(ctx->cell_mV[0] & 0xFF);
+            buf[4] = (uint8_t)(ctx->cell_mV[1] >> 8);
+            buf[5] = (uint8_t)(ctx->cell_mV[1] & 0xFF);
+            break;
+        case 2U: /* byte2/3 zero, VC5 VC6 */
+            buf[4] = (uint8_t)(ctx->cell_mV[2] >> 8);
+            buf[5] = (uint8_t)(ctx->cell_mV[2] & 0xFF);
+            buf[6] = (uint8_t)(ctx->cell_mV[3] >> 8);
+            buf[7] = (uint8_t)(ctx->cell_mV[3] & 0xFF);
+            break;
+        case 3U: /* VC7 */
+            buf[2] = (uint8_t)(ctx->cell_mV[4] >> 8);
+            buf[3] = (uint8_t)(ctx->cell_mV[4] & 0xFF);
+            break;
+        case 4U: /* VC10 */
+            buf[2] = (uint8_t)(ctx->cell_mV[5] >> 8);
+            buf[3] = (uint8_t)(ctx->cell_mV[5] & 0xFF);
+            break;
+        case 6U: /* pack total + current (SOC=0) */
+            buf[2] = (uint8_t)(ctx->pack_total_mV >> 8);
+            buf[3] = (uint8_t)(ctx->pack_total_mV & 0xFF);
+            buf[4] = 0U;
+            buf[5] = 0U;
+            buf[6] = (uint8_t)(((uint32_t)ctx->pack_current_mA >> 8) & 0xFF);
+            buf[7] = (uint8_t)((uint32_t)ctx->pack_current_mA & 0xFF);
+            break;
+        case 7U: /* temp lo, DSG, CHG */
+            buf[2] = (uint8_t)((uint16_t)ctx->ts1_temp_dC & 0xFF);
+            buf[3] = (uint8_t)((ctx->sys_ctrl2 >> 1) & 0x01U);
+            buf[4] = (uint8_t)(ctx->sys_ctrl2 & 0x01U);
+            break;
+        default: /* case 5U: all zero */
+            break;
+    }
+}
+
+void BQ76940_AppSendGoldenFrame(const struct BQ76940_AppCtx *ctx, uint8_t frame_idx)
+{
+    uint8_t buf[8];
+
+    if ((ctx == 0) || (frame_idx == 0U) || (frame_idx > 7U))
+    {
+        return;
+    }
+
+    if (CAN_DrvIsReady() == 0U)
+    {
+        return;
+    }
+
+    BQ76940_AppBuildGoldenFrame(ctx, frame_idx, buf);
+    (void)CAN_DrvSendExt((uint32_t)frame_idx, buf, 8U);
+}
+
+void BQ76940_AppSendGoldenCan(const struct BQ76940_AppCtx *ctx)
+{
+    uint8_t i;
+
+    if (ctx == 0)
+    {
+        return;
+    }
+
+    for (i = 1U; i <= 7U; i++)
+    {
+        BQ76940_AppSendGoldenFrame(ctx, i);
+    }
+}
 
 static void BQ76940_AppPackU16LE(uint8_t *buf, uint8_t offset, uint16_t value)
 {
@@ -173,7 +259,7 @@ void BQ76940_AppSendBringUpFaultCan(const BQ76940_AppCtx_t *ctx,
     data[6] = fault_flags;
     data[7] = 0U;
 
-    (void)CAN_DrvSendStd(CAN_ID_BMS_FAULT_STATUS, data, 8U);
+    (void)CAN_DrvSendExt(0x0030U, data, 8U);
 }
 
 
@@ -199,7 +285,7 @@ void BQ76940_AppSendRtosInitFaultCan(const struct BQ76940_AppCtx *ctx,
 
     (void)ctx;
 
-    (void)CAN_DrvSendStd(CAN_ID_BMS_FAULT_STATUS, data, 8U);
+    (void)CAN_DrvSendExt(0x0031U, data, 8U);
 }
 
 void BQ76940_AppSendFaultDiagCan(const BQ76940_AppCtx_t *ctx)

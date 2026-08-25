@@ -50,6 +50,10 @@ void BQ76940_AppSendRtosInitFaultCan(const struct BQ76940_AppCtx *ctx,
 
 void BQ76940_AppSendBalanceStatusCan(const struct BQ76940_AppCtx *ctx);
 
+/* CAN Golden 7 frames (ext ID 0x0001~0x0007) */
+void BQ76940_AppSendGoldenCan(const struct BQ76940_AppCtx *ctx);
+void BQ76940_AppSendGoldenFrame(const struct BQ76940_AppCtx *ctx, uint8_t frame_idx);
+
 uint8_t BQ76940_AppHandleCanCommand(const struct BQ76940_AppCtx *ctx,
                                     const CAN_DrvRxFrame_t *rx);
 

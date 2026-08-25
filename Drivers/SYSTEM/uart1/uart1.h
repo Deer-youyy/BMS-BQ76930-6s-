@@ -13,6 +13,8 @@
 void uart1_init(uint32_t BAUDRATE);
 void uart1_receiv_test(void);
 void uart1_print_hex(uint8_t *buf, uint16_t len);
+void uart1_send_bytes(const uint8_t *data, uint16_t len);
+uint16_t uart1_rx_get_frame(uint8_t *buf, uint16_t max_len);
 
 #endif
 

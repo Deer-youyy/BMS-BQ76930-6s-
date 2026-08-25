@@ -7,6 +7,7 @@
 uint8_t uart1_rx_buf[UART1_RX_BUF_SIZE];
 uint16_t uart1_rx_len = 0;
 uint16_t uart1_cnt = 0, uart1_cntPre = 0;
+volatile uint8_t s_uart1_frame_ready = 0U;
 
 UART_HandleTypeDef uart1_handle = {0};
 void uart1_init(uint32_t baudrate)
@@ -37,7 +38,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
         HAL_GPIO_Init(GPIOA, &gpio_initstruct);
         
         gpio_initstruct.Pin = GPIO_PIN_10;          // 两个LED对应的引脚
-        gpio_initstruct.Mode = GPIO_MODE_AF_INPUT;             // 推挽输出
+        gpio_initstruct.Mode = GPIO_MODE_AF_INPUT;
+        gpio_initstruct.Pull = GPIO_NOPULL;             // 推挽输出
         HAL_GPIO_Init(GPIOA, &gpio_initstruct);
         
         HAL_NVIC_EnableIRQ(USART1_IRQn);
@@ -62,8 +64,7 @@ void USART1_IRQHandler(void)
     }
 	if(__HAL_UART_GET_FLAG(&uart1_handle, UART_FLAG_IDLE) != RESET)
 	{
-		uart1_print_hex(uart1_rx_buf,uart1_rx_len);
-		uart1_rx_clear();
+		s_uart1_frame_ready = 1U;
 		__HAL_UART_CLEAR_IDLEFLAG(&uart1_handle);
 	}
 	
@@ -113,4 +114,34 @@ void uart1_print_hex(uint8_t *buf, uint16_t len)
         printf("%02X ", buf[i]);
     }
     printf("\r\n");
+}
+
+
+void uart1_send_bytes(const uint8_t *data, uint16_t len)
+{
+    uint16_t i;
+
+    for (i = 0U; i < len; i++)
+    {
+        while ((USART1->SR & USART_SR_TXE) == 0U)
+        {
+        }
+        USART1->DR = data[i];
+    }
+}
+
+uint16_t uart1_rx_get_frame(uint8_t *buf, uint16_t max_len)
+{
+    uint16_t n;
+
+    if ((s_uart1_frame_ready == 0U) || (buf == 0U) || (uart1_rx_len == 0U))
+    {
+        return 0U;
+    }
+
+    n = (uart1_rx_len <= max_len) ? uart1_rx_len : max_len;
+    memcpy(buf, uart1_rx_buf, n);
+    uart1_rx_clear();
+    s_uart1_frame_ready = 0U;
+    return n;
 }
