@@ -1,6 +1,7 @@
 #include "bms_service.h"
 
 /* Legacy App 类型仅在本实现文件中可见（逐字段映射所需）。 */
+#include "bq76930_hal.h"
 #include "bq76940_app.h"
 #include "bq76940_app_sample.h"
 #include "bq76940_app_runtime_diag.h"
@@ -107,20 +108,23 @@ BMS_ServiceContext_t *BMS_ServiceInit(BQ76940_AppCtx_t *legacy)
 /* ---------------- Sample ---------------- */
 
 void BMS_ServiceGetCalib(BMS_ServiceContext_t *svc,
-                         BQ76930_AdcCalib_t *calib)
+                         BMS_AdcCalib_t *calib)
 {
     if ((svc == NULL) || (svc->legacy == NULL) || (calib == NULL))
     {
         return;
     }
 
-    *calib = svc->legacy->calib;
+    calib->gain_uV_per_lsb = svc->legacy->calib.gain_uV_per_lsb;
+    calib->offset_mV       = svc->legacy->calib.offset_mV;
 }
 
-uint8_t BMS_ServiceSampleReadHw(const BQ76930_AdcCalib_t *calib,
+uint8_t BMS_ServiceSampleReadHw(const BMS_AdcCalib_t *calib,
                                 BMS_SampleData_t *sample)
 {
     BQ76940_AppSampleData_t legacy_sample;
+    BQ76930_AdcCalib_t legacy_calib;
+    const BQ76930_AdcCalib_t *hw_calib = NULL;
     uint8_t ret;
 
     if (sample == NULL)
@@ -128,7 +132,14 @@ uint8_t BMS_ServiceSampleReadHw(const BQ76930_AdcCalib_t *calib,
         return 1U;
     }
 
-    ret = BQ76940_AppSampleReadHw(calib, &legacy_sample);
+    if (calib != NULL)
+    {
+        legacy_calib.gain_uV_per_lsb = calib->gain_uV_per_lsb;
+        legacy_calib.offset_mV       = calib->offset_mV;
+        hw_calib                     = &legacy_calib;
+    }
+
+    ret = BQ76940_AppSampleReadHw(hw_calib, &legacy_sample);
     if (ret != 0U)
     {
         return ret;
@@ -234,6 +245,30 @@ void BMS_ServiceSampleReportFail(BMS_ServiceContext_t *svc,
                                            fault_stage,
                                            ret,
                                            enter_fault);
+}
+
+/* ---------------- Hardware Fault：中性 SYS_STAT 解码（纯函数，无锁） ---------------- */
+
+void BMS_ServiceHwFaultDecode(uint8_t sys_stat, BMS_HwFaultState_t *fault_state)
+{
+    BQ76930_HalFaultDecode_t dec;
+
+    if (fault_state == NULL)
+    {
+        return;
+    }
+
+    BQ76930_HalDecodeSysStat(sys_stat, &dec);
+
+    fault_state->ocd                  = dec.ocd;
+    fault_state->scd                  = dec.scd;
+    fault_state->ov                   = dec.ov;
+    fault_state->uv                   = dec.uv;
+    fault_state->device_not_ready     = dec.device_xready;
+    fault_state->override_alert       = dec.ovrd_alert;
+    fault_state->cc_ready             = dec.cc_ready;
+    fault_state->current_fault_active = (dec.current_fault_mask != 0U) ? 1U : 0U;
+    fault_state->voltage_fault_active = (dec.voltage_fault_mask != 0U) ? 1U : 0U;
 }
 
 /* ---------------- Runtime ---------------- */

@@ -317,7 +317,7 @@ static void BMS_SampleTask(void *argument)
     uint8_t test_fail_left = 0U;
 #endif
 
-    BQ76930_AdcCalib_t calib_snapshot;
+    BMS_AdcCalib_t calib_snapshot;
     BMS_SampleData_t sample;
 
     for (;;)
@@ -1272,7 +1272,7 @@ static void BMS_HwFaultTask(void *argument)
             uint8_t commit_ret = 0U;
             uint8_t notify_control = 0U;
             uint8_t sys_stat = 0U;
-            BQ76930_HalFaultDecode_t dec;
+            BMS_HwFaultState_t fault_state;
 
             BQ76940_OcdScdRequest_t req;
 
@@ -1288,29 +1288,29 @@ static void BMS_HwFaultTask(void *argument)
                 continue;
             }
 
-            BQ76930_HalDecodeSysStat(sys_stat, &dec);
+            BMS_ServiceHwFaultDecode(sys_stat, &fault_state);
             {
                 BMS_LOG_HW_FAULT("[HW] current:%02X\r\n",
-                                 dec.current_fault_mask);
+                                 fault_state.current_fault_active);
             }
 
-            if (dec.voltage_fault_mask != 0U)
+            if (fault_state.voltage_fault_active != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] voltage:%02X\r\n",
-                                 dec.voltage_fault_mask);
+                                 fault_state.voltage_fault_active);
             }
 
-            if (dec.device_xready != 0U)
+            if (fault_state.device_not_ready != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] XREADY\r\n");
             }
 
-            if (dec.ovrd_alert != 0U)
+            if (fault_state.override_alert != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] OVRD\r\n");
             }
 
-            if (dec.cc_ready != 0U)
+            if (fault_state.cc_ready != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] CC_READY\r\n");
             }
@@ -1319,7 +1319,7 @@ static void BMS_HwFaultTask(void *argument)
              * 当前 V1 只处理 OCD/SCD。
              * 如果本次 ALERT 不是 OCD/SCD，先返回等待下次事件。
              */
-            if (dec.current_fault_mask == 0U)
+            if (fault_state.current_fault_active == 0U)
             {
                 BMS_LOG_TEST_HW_FAULT("[HW] no OCD/SCD\r\n");
                 continue;
