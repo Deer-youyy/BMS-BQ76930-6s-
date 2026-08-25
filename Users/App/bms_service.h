@@ -173,6 +173,7 @@ void    BMS_ServiceSampleReportFail(BMS_ServiceContext_t *svc,
 
 /* ---- Hardware Fault：中性 SYS_STAT 解码（纯函数，无锁） ---- */
 void BMS_ServiceHwFaultDecode(uint8_t sys_stat, BMS_HwFaultState_t *fault_state);
+uint8_t BMS_ServiceHwFaultReadSysStat(BMS_ServiceContext_t *svc, uint8_t *sys_stat);
 /* ---- Protect锛堥攣鍩熷唴璋冪敤锛屾棤閿侊級 ---- */
 void    BMS_ServiceRuntimeFaultActive(BMS_ServiceContext_t *svc, uint8_t *active);
 uint8_t BMS_ServiceProtectCompute(BMS_ServiceContext_t *svc,

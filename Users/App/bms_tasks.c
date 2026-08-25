@@ -68,7 +68,7 @@ static void BMS_AlertSimTestTask(void *argument);
 
 static void BMS_AfeWriteInhibitSet(void);
 static uint8_t BMS_AfeWriteIsInhibited(void);
-static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat);
+static uint8_t BMS_HwFaultReadSysStat(BMS_ServiceContext_t *svc, uint8_t *sys_stat);
 static uint8_t BMS_HwFaultApplyHwWithRetry(BMS_OcdScdRequest_t *req);
 
 #if (BMS_TEST_SAFE_OFF_READBACK_ENABLE != 0U)
@@ -1152,7 +1152,7 @@ static void BMS_HwFaultTask(void *argument)
 
             BMS_LOG_HW_FAULT("[HW] alert\r\n");
 
-            ret = BMS_HwFaultReadSysStat(&sys_stat);
+            ret = BMS_HwFaultReadSysStat(svc, &sys_stat);
 
             if (ret != 0U)
             {
@@ -1280,7 +1280,7 @@ static void BMS_AlertSimTestTask(void *argument)
 }
 #endif
 
-static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat)
+static uint8_t BMS_HwFaultReadSysStat(BMS_ServiceContext_t *svc, uint8_t *sys_stat)
 {
     uint8_t ret = 0U;
 
@@ -1299,7 +1299,7 @@ static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat)
 
     if (xSemaphoreTake(g_i2c_bus_mutex, pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
     {
-        ret = BQ76930_HalReadSysStat(sys_stat);
+        ret = BMS_ServiceHwFaultReadSysStat(svc, sys_stat);
 
         xSemaphoreGive(g_i2c_bus_mutex);
     }

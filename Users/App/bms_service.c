@@ -722,3 +722,16 @@ uint8_t BMS_ServiceHwFaultCommit(BMS_ServiceContext_t *svc,
 
     return ret;
 }
+
+
+uint8_t BMS_ServiceHwFaultReadSysStat(BMS_ServiceContext_t *svc, uint8_t *sys_stat)
+{
+    (void)svc;
+
+    if (sys_stat == NULL)
+    {
+        return 1U;
+    }
+
+    return BQ76930_HalReadSysStat(sys_stat);
+}
