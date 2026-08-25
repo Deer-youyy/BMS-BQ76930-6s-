@@ -44,6 +44,10 @@
 #define BQ76930_REG_VC5_LO         0x15
 #define BQ76930_REG_VC6_HI         0x16
 #define BQ76930_REG_VC6_LO         0x17
+#define BQ76930_REG_VC7_HI         0x18
+#define BQ76930_REG_VC7_LO         0x19
+#define BQ76930_REG_VC10_HI        0x1E
+#define BQ76930_REG_VC10_LO        0x1F
 
 /* ==================== 电池组总压 / 温度 / 电流 ==================== */
 #define BQ76930_REG_BAT_HI         0x2A
@@ -60,14 +64,35 @@
 #define BQ76930_REG_ADCOFFSET      0x51
 #define BQ76930_REG_ADCGAIN2       0x59
 
-/* ==================== SYS_STAT 位 ==================== */
-#define BQ76930_SYS_STAT_CC_READY   (1U << 7)
+/* ==================== SYS_STAT 位（BQ76930 真实硬件） ==================== */
+#define BQ76930_SYS_STAT_CC_READY      (1U << 7)  /* 电流转换完成 */
+#define BQ76930_SYS_STAT_DEVICE_XREADY (1U << 5)  /* 器件异常就绪 */
+#define BQ76930_SYS_STAT_OVRD_ALERT    (1U << 4)  /* 过载告警 */
+#define BQ76930_SYS_STAT_UV            (1U << 3)  /* 0x08 欠压 */
+#define BQ76930_SYS_STAT_OV            (1U << 2)  /* 0x04 过压 */
+#define BQ76930_SYS_STAT_SCD           (1U << 1)  /* 0x02 短路 */
+#define BQ76930_SYS_STAT_OCD           (1U << 0)  /* 0x01 过流 */
 
 /* ==================== SYS_CTRL2 位 ==================== */
 #define BQ76930_SYS_CTRL2_CHG_ON    (1U << 0)
 #define BQ76930_SYS_CTRL2_DSG_ON    (1U << 1)
 #define BQ76930_SYS_CTRL2_CC_EN     (1U << 6)
 #define BQ76930_SYS_CTRL2_CC_ONESHOT (1U << 5)
+
+/* ==================== SYS_STAT 故障掩码（BQ76930 真实硬件） ==================== */
+#define BQ76930_SYS_STAT_CURRENT_FAULT_MASK \
+    (BQ76930_SYS_STAT_OCD | BQ76930_SYS_STAT_SCD)
+#define BQ76930_SYS_STAT_VOLTAGE_FAULT_MASK \
+    (BQ76930_SYS_STAT_OV | BQ76930_SYS_STAT_UV)
+#define BQ76930_SYS_STAT_AFE_FAULT_MASK \
+    (BQ76930_SYS_STAT_DEVICE_XREADY)
+#define BQ76930_SYS_STAT_ALERT_STATUS_MASK \
+    (BQ76930_SYS_STAT_OVRD_ALERT)
+#define BQ76930_SYS_STAT_HW_LATCH_MASK \
+    (BQ76930_SYS_STAT_CURRENT_FAULT_MASK | \
+     BQ76930_SYS_STAT_VOLTAGE_FAULT_MASK | \
+     BQ76930_SYS_STAT_AFE_FAULT_MASK | \
+     BQ76930_SYS_STAT_ALERT_STATUS_MASK)
 
 /* ==================== 返回码 ==================== */
 #define BQ76930_OK                   0
@@ -77,6 +102,9 @@
 
 /* 6 串电芯数 */
 #define BQ76930_CELL_COUNT          6U
+
+/* 上电初始化寄存器表长度（SYS_STAT..CC_CFG 共 11 个） */
+#define BQ76930_BASIC_REG_COUNT     11U
 
 /* ==================== 数据类型 ==================== */
 /* ADC 校准参数 */
@@ -95,15 +123,39 @@ typedef struct
     int16_t  raw_s16;
 } BQ76930_CCRaw_t;
 
-/* 6 串单体统计结果 */
+/* 6 串单体统计结果
+ * max_cell_label / min_cell_label 不是数组下标，
+ * 而是实际显示用的真实 VC 标签编号：1 / 2 / 5 / 6 / 7 / 10。
+ */
 typedef struct
 {
     uint16_t max_mV;
     uint16_t min_mV;
     uint16_t diff_mV;
-    uint8_t  max_cell_index; /* 0~5 */
-    uint8_t  min_cell_index; /* 0~5 */
+    uint8_t  max_cell_label; /* 最高单体对应真实 VC 标签 */
+    uint8_t  min_cell_label; /* 最低单体对应真实 VC 标签 */
 } BQ76930_CellStats_t;
+
+/* 基础寄存器组（与 BQ76940 地址一致，BQ76930 只用到 SYS_STAT..CC_CFG） */
+typedef struct
+{
+    uint8_t sys_stat;
+    uint8_t sys_ctrl1;
+    uint8_t sys_ctrl2;
+    uint8_t protect1;
+    uint8_t protect2;
+    uint8_t protect3;
+    uint8_t ov_trip;
+    uint8_t uv_trip;
+    uint8_t cc_cfg;
+} BQ76930_BasicRegs_t;
+
+/* CELLBAL 寄存器结构（BQ76930 只有 CELLBAL1 / CELLBAL2 两个寄存器） */
+typedef struct
+{
+    uint8_t cellbal1;
+    uint8_t cellbal2;
+} BQ76930_CellBalRegs_t;
 
 /* ==================== 基础读写 ==================== */
 uint8_t BQ76930_ReadReg(uint8_t reg_addr, uint8_t *data);
@@ -114,6 +166,24 @@ uint8_t BQ76930_WriteReg_CRC(uint8_t reg_addr, uint8_t data);
 uint8_t BQ76930_ReadSysStat(uint8_t *sys_stat);
 uint8_t BQ76930_ClearSysStatBits(uint8_t mask);
 uint8_t BQ76930_ReadSysCtrl2(uint8_t *sys_ctrl2);
+
+/* ==================== 上电 bring-up / 保护配置 ==================== */
+uint8_t BQ76930_ReadBasicRegs(BQ76930_BasicRegs_t *regs);
+uint8_t BQ76930_InitForBringUp(void);
+uint8_t BQ76930_LoadProtectionParams(uint8_t protect3,
+                                     uint8_t ov_trip,
+                                     uint8_t uv_trip);
+uint8_t BQ76930_CalcOvTripFrommV(uint16_t ov_mV,
+                                 uint16_t gain_uV_per_lsb,
+                                 int16_t offset_mV);
+uint8_t BQ76930_CalcUvTripFrommV(uint16_t uv_mV,
+                                 uint16_t gain_uV_per_lsb,
+                                 int16_t offset_mV);
+uint8_t BQ76930_ProtectGetActiveFaultMask(uint8_t sys_stat, uint8_t *fault_mask);
+uint8_t BQ76930_ProtectClearFaultBits(uint8_t fault_mask);
+
+/* ==================== FET 控制（CHG/DSG，SYS_CTRL2 RMW） ==================== */
+uint8_t BQ76930_SetFETState(uint8_t chg_on, uint8_t dsg_on);
 
 /* ==================== ADC 校准 ==================== */
 uint8_t BQ76930_GetAdcCalib(BQ76930_AdcCalib_t *calib);
@@ -145,5 +215,14 @@ uint8_t BQ76930_ConvertCurrent_mA(int16_t cc_raw_s16,
 /* ==================== 温度（NTC） ==================== */
 uint8_t BQ76930_ReadNtcRaw(uint8_t ts_hi_reg, uint8_t ts_lo_reg, uint16_t *raw_adc);
 uint8_t BQ76930_ConvertNtcTemp_dC(uint16_t raw_adc, int16_t *temp_dC);
+
+/* ==================== 均衡（CELLBAL） ==================== */
+uint8_t BQ76930_ReadCellBalRegs(BQ76930_CellBalRegs_t *regs);
+uint8_t BQ76930_WriteCellBalRegs(const BQ76930_CellBalRegs_t *regs);
+void    BQ76930_ClearCellBalRegs(BQ76930_CellBalRegs_t *regs);
+
+/* 根据真实电芯编号（VC label，1/2/5/6/7/10）构造单节均衡位 */
+uint8_t BQ76930_BuildSingleCellBalMask(uint8_t cell_label,
+                                       BQ76930_CellBalRegs_t *regs);
 
 #endif /* __BQ76930_DRV_H */

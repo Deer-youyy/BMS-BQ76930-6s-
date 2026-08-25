@@ -1,7 +1,7 @@
 #ifndef __BQ76940_APP_H
 #define __BQ76940_APP_H
 
-#include "bq76940_drv.h"
+#include "bq76930_hal.h"
 #include "../../Core/bms_types.h"
 #include "bq76940_alarm.h"
 #include "bq76940_protect.h"
@@ -28,15 +28,15 @@ typedef struct
 typedef struct BQ76940_AppCtx
 {
 	/* 硬件寄存器与校准 */
-	BQ76940_BasicRegs_t regs;
-	BQ76940_AdcCalib_t calib;
+	BQ76930_BasicRegs_t regs;
+	BQ76930_AdcCalib_t calib;
 
 	/* 状态寄存器 */
 	uint8_t sys_stat;
 	uint8_t sys_ctrl2;
 
 	/* 单体采样数据 */
-	uint16_t cell_raw[BQ76940_CELL_COUNT_9]; /* 原始 ADC，硬件相关，随驱动宏 */
+	uint16_t cell_raw[BMS_CELL_COUNT]; /* 原始 ADC，硬件相关，随驱动宏 */
 	uint16_t cell_mV[BMS_CELL_COUNT];		 /* 域电压（mV），随 Core 领域宏 */
 	uint32_t pack_total_mV;
 	BQ76940_CellStats9_t cell_stats;
@@ -49,7 +49,7 @@ typedef struct BQ76940_AppCtx
 	BQ76940_HwProtectCfg_t hw_cfg;
 
 	/* CC 原始值 */
-	BQ76940_CCRaw_t cc_raw;
+	BQ76930_CCRaw_t cc_raw;
 
 	/* 包电流换算结果 */
 	int32_t pack_current_mA;
@@ -85,8 +85,8 @@ typedef struct BQ76940_AppCtx
 	uint8_t  hw_fault_last_code;
 	uint16_t hw_fault_count;
 
-	BQ76940_CellBalRegs_t cellbal_wr;
-	BQ76940_CellBalRegs_t cellbal_rd;
+	BQ76930_CellBalRegs_t cellbal_wr;
+	BQ76930_CellBalRegs_t cellbal_rd;
 
 
 	BQ76940_BalanceConfig_t bal_cfg;
@@ -98,8 +98,8 @@ typedef struct BQ76940_AppCtx
 	uint32_t bal_last_refresh_ms;  /* 上一次均衡 mask 刷新的系统时间戳，单位 ms */
 	uint8_t bal_parity_phase;			 /* 均衡奇偶分时窗口标记：0=偶数逻辑串窗口，1=奇数逻辑串窗口 */
 
-	BQ76940_CellBalRegs_t bal_auto_wr;
-	BQ76940_CellBalRegs_t bal_auto_rd;
+	BQ76930_CellBalRegs_t bal_auto_wr;
+	BQ76930_CellBalRegs_t bal_auto_rd;
 
 	/* 诊断状态 */
 	BQ76940_DiagState_t diag_state;

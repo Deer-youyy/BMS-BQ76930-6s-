@@ -37,20 +37,16 @@ uint8_t BQ76940_AppOcdScdDecide(const BQ76940_AppCtx_t *ctx,
      *   ctx->sys_stat 已经在 SampleTask 采样阶段读取并提交到 app。
      *   这里不直接读 BQ76940。
      */
-    req->sys_stat_snapshot = ctx->sys_stat;
+        req->sys_stat_snapshot = ctx->sys_stat;
 
-    req->hw_fault_now = (uint8_t)(ctx->sys_stat &
-                                  (BQ76940_SYS_STAT_OCD |
-                                   BQ76940_SYS_STAT_SCD));
-
-    if ((ctx->sys_stat & BQ76940_SYS_STAT_OCD) != 0U)
     {
-        req->ocd_now = 1U;
-    }
+        BQ76930_HalFaultDecode_t dec;
 
-    if ((ctx->sys_stat & BQ76940_SYS_STAT_SCD) != 0U)
-    {
-        req->scd_now = 1U;
+        BQ76930_HalDecodeSysStat(ctx->sys_stat, &dec);
+
+        req->hw_fault_now = (uint8_t)((dec.ocd | dec.scd) ? 1U : 0U);
+        req->ocd_now      = dec.ocd;
+        req->scd_now      = dec.scd;
     }
 		
 		//错误码判断
@@ -134,7 +130,7 @@ uint8_t BQ76940_AppOcdScdApplyHw(const BQ76940_OcdScdRequest_t *req)
 
     if (req->action == BQ76940_OCDSCD_ACTION_DSG_OFF)
     {
-        ret = BQ76940_SetDSGState(0U);
+        ret = BQ76930_HalSetDSG(0U);
         if (ret != 0U)
         {
             return 2U;
@@ -157,7 +153,7 @@ uint8_t BQ76940_AppOcdScdApplyHw(const BQ76940_OcdScdRequest_t *req)
 
     if (req->action == BQ76940_OCDSCD_ACTION_DSG_ON)
     {
-        ret = BQ76940_SetDSGState(1U);
+        ret = BQ76930_HalSetDSG(1U);
         if (ret != 0U)
         {
             return 4U;
@@ -184,7 +180,7 @@ uint8_t BQ76940_AppOcdScdCommit(BQ76940_AppCtx_t *ctx,const BQ76940_OcdScdReques
         return 1U;
     }
 		
-		ctx->hw_fault_sys_stat_latched |= (uint8_t)(req->sys_stat_snapshot & BQ76940_SYS_STAT_HW_LATCH_MASK);
+		ctx->hw_fault_sys_stat_latched |= BQ76930_HalFaultLatchMask(req->sys_stat_snapshot);
 
 		ctx->hw_fault_last_apply_ret = req->apply_ret;
 		ctx->hw_fault_last_code      = req->fault_code;
@@ -201,7 +197,7 @@ uint8_t BQ76940_AppOcdScdCommit(BQ76940_AppCtx_t *ctx,const BQ76940_OcdScdReques
      *   所以这里单独保存曾经触发过的硬件故障位。
      */
     ctx->hw_fault_sys_stat_latched |=
-        (uint8_t)(req->sys_stat_snapshot & BQ76940_SYS_STAT_HW_LATCH_MASK);
+        BQ76930_HalFaultLatchMask(req->sys_stat_snapshot);
 
     /*
      * 锁存当前是否发生过 OCD / SCD。

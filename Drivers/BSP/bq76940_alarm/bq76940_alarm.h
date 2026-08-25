@@ -2,6 +2,7 @@
 #define __BQ76940_ALARM_H
 
 #include "bq76940_drv.h"
+#include "../../../Core/bms_types.h"
 
 typedef struct
 {
@@ -50,7 +51,7 @@ typedef struct
 
 
 
-uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BQ76940_CELL_COUNT_9],
+uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BMS_CELL_COUNT],
                                   const BQ76940_CellStats9_t *stats,
                                   const BQ76940_AlarmThreshold9_t *th,
                                   BQ76940_AlarmState9_t *state);

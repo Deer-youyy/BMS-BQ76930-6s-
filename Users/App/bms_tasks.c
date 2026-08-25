@@ -14,9 +14,9 @@
 #include "bq34z100_app.h"
 #include "bq76200_exec_port.h"
 #include "bq76940_alert_sim.h"
-#include "bq76940_balance.h"
+#include "bq76930_balance.h"
 
-#define BMS_TEST_FAKE_HW_FAULT_SYS_STAT (BQ76940_SYS_STAT_OCD | BQ76940_SYS_STAT_SCD)
+#define BMS_TEST_FAKE_HW_FAULT_SYS_STAT 0x03U
 
 #if (BMS_ENABLE_GAUGE_TASK != 0U)
 static BQ34Z100_AppCtx_t g_bq34z100_ctx;
@@ -317,7 +317,7 @@ static void BMS_SampleTask(void *argument)
     uint8_t test_fail_left = 0U;
 #endif
 
-    BQ76940_AdcCalib_t calib_snapshot;
+    BQ76930_AdcCalib_t calib_snapshot;
     BQ76940_AppSampleData_t sample;
 
     for (;;)
@@ -1204,7 +1204,7 @@ static uint8_t BMS_AfeWriteIsInhibited(void)
 #if (BMS_TEST_SAFE_OFF_READBACK_ENABLE != 0U)
 static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
 {
-    BQ76940_CellBalRegs_t cellbal = {0xFFU, 0xFFU, 0xFFU};
+    BQ76930_CellBalRegs_t cellbal = {0xFFU, 0xFFU};
     uint8_t sys_ctrl2 = 0xFFU;
     uint8_t cellbal_ret = BMS_TASK_RET_I2C_LOCK_TIMEOUT;
     uint8_t sys_ctrl2_ret = BMS_TASK_RET_I2C_LOCK_TIMEOUT;
@@ -1223,8 +1223,8 @@ static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
     if (xSemaphoreTake(g_i2c_bus_mutex,
                        pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
     {
-        cellbal_ret = BQ76940_ReadCellBalRegs(&cellbal);
-        sys_ctrl2_ret = BQ76940_ReadSysCtrl2(&sys_ctrl2);
+        cellbal_ret = BQ76930_HalReadCellBalRegs(&cellbal);
+        sys_ctrl2_ret = BQ76930_HalReadSysCtrl2(&sys_ctrl2);
         xSemaphoreGive(g_i2c_bus_mutex);
     }
 
@@ -1241,13 +1241,12 @@ static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
     inhibited = BMS_AfeWriteIsInhibited();
 
     readback_pass =
-        ((cellbal_ret == BQ76940_OK) &&
-         (sys_ctrl2_ret == BQ76940_OK) &&
+        ((cellbal_ret == BQ76930_OK) &&
+         (sys_ctrl2_ret == BQ76930_OK) &&
          (cellbal.cellbal1 == 0U) &&
          (cellbal.cellbal2 == 0U) &&
-         (cellbal.cellbal3 == 0U) &&
-         ((sys_ctrl2 & (BQ76940_SYS_CTRL2_CHG_ON |
-                        BQ76940_SYS_CTRL2_DSG_ON)) == 0U) &&
+         ((sys_ctrl2 & (0x01U |
+                        0x02U)) == 0U) &&
          (chg_en == 0U) &&
          (dsg_en == 0U) &&
          (cp_en == 0U) &&
@@ -1257,12 +1256,11 @@ static void BMS_RuntimeSafeOffReadback(BQ76940_AppCtx_t *app)
             ? 1U
             : 0U;
 
-    BMS_LOG_TEST_HW_FAULT("[TEST] RB I2C:%u/%u %02X/%02X/%02X/%02X\r\n",
+    BMS_LOG_TEST_HW_FAULT("[TEST] RB I2C:%u/%u %02X/%02X/%02X\r\n",
                           cellbal_ret,
                           sys_ctrl2_ret,
                           cellbal.cellbal1,
                           cellbal.cellbal2,
-                          cellbal.cellbal3,
                           sys_ctrl2);
     BMS_LOG_TEST_HW_FAULT("[TEST] RB GPIO:%u/%u/%u/%u F:%u I:%u\r\n",
                           chg_en,
@@ -1301,6 +1299,7 @@ static void BMS_HwFaultTask(void *argument)
             uint8_t commit_ret = 0U;
             uint8_t notify_control = 0U;
             uint8_t sys_stat = 0U;
+            BQ76930_HalFaultDecode_t dec;
 
             BQ76940_OcdScdRequest_t req;
 
@@ -1316,29 +1315,29 @@ static void BMS_HwFaultTask(void *argument)
                 continue;
             }
 
-            if ((sys_stat & BQ76940_SYS_STAT_CURRENT_FAULT_MASK) != 0U)
+            BQ76930_HalDecodeSysStat(sys_stat, &dec);
             {
                 BMS_LOG_HW_FAULT("[HW] current:%02X\r\n",
-                                 (uint8_t)(sys_stat & BQ76940_SYS_STAT_CURRENT_FAULT_MASK));
+                                 dec.current_fault_mask);
             }
 
-            if ((sys_stat & BQ76940_SYS_STAT_VOLTAGE_FAULT_MASK) != 0U)
+            if (dec.voltage_fault_mask != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] voltage:%02X\r\n",
-                                 (uint8_t)(sys_stat & BQ76940_SYS_STAT_VOLTAGE_FAULT_MASK));
+                                 dec.voltage_fault_mask);
             }
 
-            if ((sys_stat & BQ76940_SYS_STAT_DEVICE_XREADY) != 0U)
+            if (dec.device_xready != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] XREADY\r\n");
             }
 
-            if ((sys_stat & BQ76940_SYS_STAT_OVRD_ALERT) != 0U)
+            if (dec.ovrd_alert != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] OVRD\r\n");
             }
 
-            if ((sys_stat & BQ76940_SYS_STAT_CC_READY) != 0U)
+            if (dec.cc_ready != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] CC_READY\r\n");
             }
@@ -1347,7 +1346,7 @@ static void BMS_HwFaultTask(void *argument)
              * 当前 V1 只处理 OCD/SCD。
              * 如果本次 ALERT 不是 OCD/SCD，先返回等待下次事件。
              */
-            if ((sys_stat & BQ76940_SYS_STAT_CURRENT_FAULT_MASK) == 0U)
+            if (dec.current_fault_mask == 0U)
             {
                 BMS_LOG_TEST_HW_FAULT("[HW] no OCD/SCD\r\n");
                 continue;
@@ -1483,7 +1482,7 @@ static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat)
 
     if (xSemaphoreTake(g_i2c_bus_mutex, pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
     {
-        ret = BQ76940_ReadSysStat(sys_stat);
+        ret = BQ76930_HalReadSysStat(sys_stat);
 
         xSemaphoreGive(g_i2c_bus_mutex);
     }

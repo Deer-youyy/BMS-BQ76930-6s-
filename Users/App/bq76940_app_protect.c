@@ -148,7 +148,7 @@ uint8_t BQ76940_AppOtProtectApplyHw(const BQ76940_OtProtectRequest_t *req)
      */
     if (req->action == BQ76940_OT_ACTION_FET_OFF)
     {
-        ret = BQ76940_SetFETState(0U, 0U);
+        ret = BQ76930_HalApplyFetEn(0U, 0U);
         if (ret != 0U)
         {
             return 2U;
@@ -167,7 +167,7 @@ uint8_t BQ76940_AppOtProtectApplyHw(const BQ76940_OtProtectRequest_t *req)
      */
     if (req->action == BQ76940_OT_ACTION_FET_ON)
     {
-        ret = BQ76940_SetFETState(1U, 1U);
+        ret = BQ76930_HalApplyFetEn(1U, 1U);
         if (ret != 0U)
         {
             return 3U;
@@ -428,7 +428,7 @@ uint8_t BQ76940_AppUtProtectApplyHw(const BQ76940_UtProtectRequest_t *req)
      */
     if (req->action == BQ76940_UT_ACTION_CHG_OFF)
     {
-        ret = BQ76940_SetCHGState(0U);
+        ret = BQ76930_HalSetCHG(0U);
         if (ret != 0U)
         {
             return 2U;
@@ -458,7 +458,7 @@ uint8_t BQ76940_AppUtProtectApplyHw(const BQ76940_UtProtectRequest_t *req)
      */
     if (req->action == BQ76940_UT_ACTION_CHG_ON)
     {
-        ret = BQ76940_SetCHGState(1U);
+        ret = BQ76930_HalSetCHG(1U);
         if (ret != 0U)
         {
             return 3U;

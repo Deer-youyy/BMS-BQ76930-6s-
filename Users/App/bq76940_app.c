@@ -81,8 +81,8 @@ void BQ76940_AppInitDefaultConfig(BQ76940_AppCtx_t *ctx)
     // 初始化运行就诊
     BQ76940_AppRuntimeDiagInit(&ctx->runtime_diag);
 
-    BQ76940_ClearCellBalRegs(&ctx->cellbal_wr);
-    BQ76940_ClearCellBalRegs(&ctx->cellbal_rd);
+    BQ76930_ClearCellBalRegs(&ctx->cellbal_wr);
+    BQ76930_ClearCellBalRegs(&ctx->cellbal_rd);
 
     /* BQ76200 执行层初始化 */
     BQ76200_ExecInit(&ctx->bq76200_exec);
@@ -104,8 +104,8 @@ void BQ76940_AppInitDefaultConfig(BQ76940_AppCtx_t *ctx)
 		ctx->bal_parity_phase = 0;
     
 
-    BQ76940_ClearCellBalRegs(&ctx->bal_auto_wr);
-    BQ76940_ClearCellBalRegs(&ctx->bal_auto_rd);
+    BQ76930_ClearCellBalRegs(&ctx->bal_auto_wr);
+    BQ76930_ClearCellBalRegs(&ctx->bal_auto_rd);
 }
 
 // static uint8_t BQ76940_AppPrintSysCtrl2Readback(const char *tag)
@@ -160,17 +160,17 @@ uint8_t BQ76940_AppForceAfeOffHw(void)
 {
     uint8_t result = SAFE_OFF_FAIL_NONE;
     uint8_t ret;
-    BQ76940_CellBalRegs_t zero_bal;
+    BQ76930_CellBalRegs_t zero_bal;
 
-    BQ76940_ClearCellBalRegs(&zero_bal);
+    BQ76930_ClearCellBalRegs(&zero_bal);
 
-    ret = BQ76940_WriteCellBalRegs(&zero_bal);
+    ret = BQ76930_WriteCellBalRegs(&zero_bal);
     if (ret != 0U)
     {
         result |= SAFE_OFF_FAIL_CELLBAL;
     }
 
-    ret = BQ76940_SetFETState(0U, 0U);
+    ret = BQ76930_HalApplyFetEn(0U, 0U);
     if (ret != 0U)
     {
         result |= SAFE_OFF_FAIL_AFE_FET;
@@ -201,10 +201,10 @@ void BQ76940_AppForceAfeOffCommit(BQ76940_AppCtx_t *ctx,
         ctx->bal_active = 0U;
         ctx->bal_target_label = 0U;
 
-        BQ76940_ClearCellBalRegs(&ctx->cellbal_wr);
-        BQ76940_ClearCellBalRegs(&ctx->cellbal_rd);
-        BQ76940_ClearCellBalRegs(&ctx->bal_auto_wr);
-        BQ76940_ClearCellBalRegs(&ctx->bal_auto_rd);
+        BQ76930_ClearCellBalRegs(&ctx->cellbal_wr);
+        BQ76930_ClearCellBalRegs(&ctx->cellbal_rd);
+        BQ76930_ClearCellBalRegs(&ctx->bal_auto_wr);
+        BQ76930_ClearCellBalRegs(&ctx->bal_auto_rd);
     }
 }
 
@@ -225,7 +225,25 @@ static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
     delay_ms(20);
 
     /* 2. 最小 bring-up：初始化寄存器、读取基础寄存器、读取 ADC 校准 */
-    ret = BQ76940_ProtectBringUp(&ctx->regs, &ctx->calib);
+    ret = BQ76930_HalInit();
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_BASIC,
+                                   ret);
+        return 11U;
+    }
+
+    ret = BQ76930_HalReadBasicRegs(&ctx->regs);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_BASIC,
+                                   ret);
+        return 11U;
+    }
+
+    ret = BQ76930_HalGetAdcCalib(&ctx->calib);
     if (ret != 0U)
     {
         BQ76940_AppSetBringUpFault(ctx,
@@ -240,9 +258,10 @@ static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
         BQ76940_PrintBasicRegs(&ctx->regs);
 
     /* 3. 加载硬件 OV / UV 保护参数 */
-    ret = BQ76940_ProtectLoadConfig(&ctx->hw_cfg,
-                                    &ctx->calib,
-                                    &ctx->regs);
+    ret = BQ76930_HalLoadProtection(ctx->hw_cfg.protect3,
+                                    ctx->hw_cfg.ov_target_mV,
+                                    ctx->hw_cfg.uv_target_mV,
+                                    &ctx->calib);
     if (ret != 0U)
     {
         BQ76940_AppSetBringUpFault(ctx,
@@ -255,7 +274,16 @@ static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
         BQ76940_PrintBasicRegs(&ctx->regs);
 
     /* 4. 读取当前硬件状态 */
-    ret = BQ76940_ProtectReadStatus(&ctx->sys_stat, &ctx->sys_ctrl2);
+    ret = BQ76930_HalReadSysStat(&ctx->sys_stat);
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_STATUS,
+                                   ret);
+        return 13U;
+    }
+
+    ret = BQ76930_HalReadSysCtrl2(&ctx->sys_ctrl2);
     if (ret != 0U)
     {
         BQ76940_AppSetBringUpFault(ctx,
@@ -265,7 +293,8 @@ static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
     }
 
     /* 5. 加载 OCD / SCD 硬件保护参数 */
-    ret = BQ76940_ProtectLoadOcdScd(&ctx->ocdscd_cfg, &ctx->regs);
+    /* BQ76930 OCD/SCD are fixed by InitForBringUp (PROTECT1/2 = 0xFF); no runtime write. */
+    ret = BQ76930_OK;
     if (ret != 0U)
     {
         BQ76940_AppSetBringUpFault(ctx,
@@ -406,7 +435,7 @@ void BQ76940_AppPrintRuntime(const BQ76940_AppCtx_t *ctx)
     BQ76940_PrintAllMappedCellVoltages9(ctx->cell_raw,
                                         ctx->cell_mV,
                                         ctx->pack_total_mV);
-    BMS_LOG_PERIODIC("[BMS] Pack:%lu Max:VC%u=%umV Min:VC%u=%umV Diff:%umV Current:%ldmA Temp:%d Alarm:%02X Protect:%02X Balance:%u Target:VC%u Count:%u Mask:%02X/%02X/%02X Sys:%02X\r\n",
+    BMS_LOG_PERIODIC("[BMS] Pack:%lu Max:VC%u=%umV Min:VC%u=%umV Diff:%umV Current:%ldmA Temp:%d Alarm:%02X Protect:%02X Balance:%u Target:VC%u Count:%u Mask:%02X/%02X Sys:%02X\r\n",
                      (unsigned long)ctx->pack_total_mV,
                      ctx->cell_stats.max_cell_label,
                      ctx->cell_stats.max_mV,
@@ -422,6 +451,5 @@ void BQ76940_AppPrintRuntime(const BQ76940_AppCtx_t *ctx)
                      ctx->bal_target_count,
                      ctx->bal_auto_wr.cellbal1,
                      ctx->bal_auto_wr.cellbal2,
-                     ctx->bal_auto_wr.cellbal3,
                      ctx->sys_stat);
 }

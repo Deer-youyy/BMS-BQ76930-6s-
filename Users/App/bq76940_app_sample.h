@@ -18,13 +18,13 @@
  */
 typedef struct
 {
-    uint16_t cell_raw[BQ76940_CELL_COUNT_9]; /* 原始 ADC，硬件相关，随驱动宏 */
+    uint16_t cell_raw[BMS_CELL_COUNT]; /* 原始 ADC，硬件相关，随驱动宏 */
     uint16_t cell_mV[BMS_CELL_COUNT];        /* 域电压（mV），随 Core 领域宏 */
 
     uint32_t pack_total_mV;
     BQ76940_CellStats9_t cell_stats;
 
-    BQ76940_CCRaw_t cc_raw;
+    BQ76930_CCRaw_t cc_raw;
     int32_t pack_current_mA;
     int8_t pack_current_dir;
 
@@ -44,7 +44,7 @@ struct BQ76940_AppCtx;
  * 只读取 BQ76940 硬件数据。
  * 该函数内部会访问 I2C，总线锁应由上层任务持有。
  */
-uint8_t BQ76940_AppSampleReadHw(const BQ76940_AdcCalib_t *calib,
+uint8_t BQ76940_AppSampleReadHw(const BQ76930_AdcCalib_t *calib,
                                 BQ76940_AppSampleData_t *sample);
 
 /*

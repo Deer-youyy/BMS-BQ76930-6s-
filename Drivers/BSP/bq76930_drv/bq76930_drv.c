@@ -144,6 +144,183 @@ uint8_t BQ76930_ReadSysCtrl2(uint8_t *sys_ctrl2)
     return BQ76930_ReadReg(BQ76930_REG_SYS_CTRL2, sys_ctrl2);
 }
 
+/* ==================== 上电 bring-up / 保护配置 ==================== */
+
+uint8_t BQ76930_ReadBasicRegs(BQ76930_BasicRegs_t *regs)
+{
+    if (regs == 0U)
+    {
+        return BQ76930_ERR_PARAM;
+    }
+
+    if (BQ76930_ReadReg(BQ76930_REG_SYS_STAT,  &regs->sys_stat)  != BQ76930_OK) return 11;
+    if (BQ76930_ReadReg(BQ76930_REG_SYS_CTRL1, &regs->sys_ctrl1) != BQ76930_OK) return 12;
+    if (BQ76930_ReadReg(BQ76930_REG_SYS_CTRL2, &regs->sys_ctrl2) != BQ76930_OK) return 13;
+    if (BQ76930_ReadReg(BQ76930_REG_PROTECT1,  &regs->protect1)  != BQ76930_OK) return 14;
+    if (BQ76930_ReadReg(BQ76930_REG_PROTECT2,  &regs->protect2)  != BQ76930_OK) return 15;
+    if (BQ76930_ReadReg(BQ76930_REG_PROTECT3,  &regs->protect3)  != BQ76930_OK) return 16;
+    if (BQ76930_ReadReg(BQ76930_REG_OV_TRIP,   &regs->ov_trip)   != BQ76930_OK) return 17;
+    if (BQ76930_ReadReg(BQ76930_REG_UV_TRIP,   &regs->uv_trip)   != BQ76930_OK) return 18;
+    if (BQ76930_ReadReg(BQ76930_REG_CC_CFG,    &regs->cc_cfg)    != BQ76930_OK) return 19;
+
+    return BQ76930_OK;
+}
+
+/* 上电最小初始化：按 LOCKED 6S 硬件事实写寄存器表。
+ * 与真实源码 BQ_1_config 一致：
+ *   SYS_STAT=0xFF  CELLBAL1=0x00  CELLBAL2=0x00  SYS_CTRL1=0x18  SYS_CTRL2=0x43
+ *   PROTECT1=0xFF  PROTECT2=0xFF  PROTECT3=0x00  OV_TRIP=0x00    UV_TRIP=0x00
+ *   CC_CFG=0x19
+ * PROTECT1/PROTECT2 = 0xFF 行为已获批准保持，禁止按手册保留位说明修改。 */
+uint8_t BQ76930_InitForBringUp(void)
+{
+    static const uint8_t reg_table[BQ76930_BASIC_REG_COUNT] =
+    {
+        BQ76930_REG_SYS_STAT,
+        BQ76930_REG_CELLBAL1,
+        BQ76930_REG_CELLBAL2,
+        BQ76930_REG_SYS_CTRL1,
+        BQ76930_REG_SYS_CTRL2,
+        BQ76930_REG_PROTECT1,
+        BQ76930_REG_PROTECT2,
+        BQ76930_REG_PROTECT3,
+        BQ76930_REG_OV_TRIP,
+        BQ76930_REG_UV_TRIP,
+        BQ76930_REG_CC_CFG
+    };
+
+    static const uint8_t data_table[BQ76930_BASIC_REG_COUNT] =
+    {
+        0xFF, 0x00, 0x00, 0x18, 0x43, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x19
+    };
+
+    uint8_t i;
+    uint8_t ret;
+
+    for (i = 0U; i < BQ76930_BASIC_REG_COUNT; i++)
+    {
+        ret = BQ76930_WriteReg_CRC(reg_table[i], data_table[i]);
+        if (ret != BQ76930_OK)
+        {
+            return (uint8_t)(2U + i);
+        }
+    }
+
+    return BQ76930_OK;
+}
+
+uint8_t BQ76930_LoadProtectionParams(uint8_t protect3,
+                                     uint8_t ov_trip,
+                                     uint8_t uv_trip)
+{
+    uint8_t ret;
+    uint8_t rd;
+
+    /* 1. 写 PROTECT3 */
+    ret = BQ76930_WriteReg_CRC(BQ76930_REG_PROTECT3, protect3);
+    if (ret != BQ76930_OK) return 1;
+
+    ret = BQ76930_ReadReg(BQ76930_REG_PROTECT3, &rd);
+    if (ret != BQ76930_OK) return 11;
+    if (rd != protect3) return 21;
+
+    /* 2. 写 OV_TRIP */
+    ret = BQ76930_WriteReg_CRC(BQ76930_REG_OV_TRIP, ov_trip);
+    if (ret != BQ76930_OK) return 2;
+
+    ret = BQ76930_ReadReg(BQ76930_REG_OV_TRIP, &rd);
+    if (ret != BQ76930_OK) return 12;
+    if (rd != ov_trip) return 22;
+
+    /* 3. 写 UV_TRIP */
+    ret = BQ76930_WriteReg_CRC(BQ76930_REG_UV_TRIP, uv_trip);
+    if (ret != BQ76930_OK) return 3;
+
+    ret = BQ76930_ReadReg(BQ76930_REG_UV_TRIP, &rd);
+    if (ret != BQ76930_OK) return 13;
+    if (rd != uv_trip) return 23;
+
+    return BQ76930_OK;
+}
+
+uint8_t BQ76930_CalcOvTripFrommV(uint16_t ov_mV,
+                                 uint16_t gain_uV_per_lsb,
+                                 int16_t offset_mV)
+{
+    uint32_t full_adc;
+
+    /* full_adc ≈ (ov_mV - offset_mV) / (gain_uV_per_lsb / 1000) */
+    full_adc = ((uint32_t)(ov_mV - offset_mV) * 1000U) / gain_uV_per_lsb;
+
+    /* 取 14 位 ADC 值的中间 8 位 */
+    return (uint8_t)((full_adc >> 4) & 0xFFU);
+}
+
+uint8_t BQ76930_CalcUvTripFrommV(uint16_t uv_mV,
+                                 uint16_t gain_uV_per_lsb,
+                                 int16_t offset_mV)
+{
+    uint32_t full_adc;
+
+    full_adc = ((uint32_t)(uv_mV - offset_mV) * 1000U) / gain_uV_per_lsb;
+
+    return (uint8_t)((full_adc >> 4) & 0xFFU);
+}
+
+uint8_t BQ76930_ProtectGetActiveFaultMask(uint8_t sys_stat, uint8_t *fault_mask)
+{
+    if (fault_mask == 0U)
+    {
+        return BQ76930_ERR_PARAM;
+    }
+
+    *fault_mask = (uint8_t)(sys_stat & BQ76930_SYS_STAT_HW_LATCH_MASK);
+
+    return BQ76930_OK;
+}
+
+uint8_t BQ76930_ProtectClearFaultBits(uint8_t fault_mask)
+{
+    if (fault_mask == 0U)
+    {
+        return BQ76930_OK;
+    }
+
+    /* SYS_STAT：写 1 清对应位（BQ76930 真实硬件） */
+    return BQ76930_WriteReg_CRC(BQ76930_REG_SYS_STAT, fault_mask);
+}
+
+/* CHG/DSG 使能控制：读改写 SYS_CTRL2，保留 CC_EN/CC_ONESHOT 语义。 */
+uint8_t BQ76930_SetFETState(uint8_t chg_on, uint8_t dsg_on)
+{
+    uint8_t sys_ctrl2;
+
+    if (BQ76930_ReadReg(BQ76930_REG_SYS_CTRL2, &sys_ctrl2) != BQ76930_OK)
+    {
+        return BQ76930_ERR_COMM;
+    }
+
+    if (chg_on != 0U)
+    {
+        sys_ctrl2 |= BQ76930_SYS_CTRL2_CHG_ON;
+    }
+    else
+    {
+        sys_ctrl2 &= (uint8_t)(~BQ76930_SYS_CTRL2_CHG_ON);
+    }
+
+    if (dsg_on != 0U)
+    {
+        sys_ctrl2 |= BQ76930_SYS_CTRL2_DSG_ON;
+    }
+    else
+    {
+        sys_ctrl2 &= (uint8_t)(~BQ76930_SYS_CTRL2_DSG_ON);
+    }
+
+    return BQ76930_WriteReg_CRC(BQ76930_REG_SYS_CTRL2, sys_ctrl2);
+}
+
 /* ==================== ADC 校准 ==================== */
 
 uint8_t BQ76930_GetAdcCalib(BQ76930_AdcCalib_t *calib)
@@ -224,24 +401,27 @@ uint8_t BQ76930_ReadCellVoltage_mV(uint8_t cell_index,
                                    uint16_t *raw_adc,
                                    uint16_t *voltage_mV)
 {
+    /* 真实 6S 硬件映射：逻辑单体 i → VC label。
+     * 逻辑 0~5 → VC1,VC2,VC5,VC6,VC7,VC10
+     * 禁止按连续 VC1~VC6 读取。 */
     static const uint8_t vc_hi[BQ76930_CELL_COUNT] =
     {
         BQ76930_REG_VC1_HI,
         BQ76930_REG_VC2_HI,
-        BQ76930_REG_VC3_HI,
-        BQ76930_REG_VC4_HI,
         BQ76930_REG_VC5_HI,
-        BQ76930_REG_VC6_HI
+        BQ76930_REG_VC6_HI,
+        BQ76930_REG_VC7_HI,
+        BQ76930_REG_VC10_HI
     };
 
     static const uint8_t vc_lo[BQ76930_CELL_COUNT] =
     {
         BQ76930_REG_VC1_LO,
         BQ76930_REG_VC2_LO,
-        BQ76930_REG_VC3_LO,
-        BQ76930_REG_VC4_LO,
         BQ76930_REG_VC5_LO,
-        BQ76930_REG_VC6_LO
+        BQ76930_REG_VC6_LO,
+        BQ76930_REG_VC7_LO,
+        BQ76930_REG_VC10_LO
     };
 
     uint8_t ret = 0;
@@ -321,6 +501,12 @@ uint32_t BQ76930_CalcPackVoltage_mV(const uint16_t voltage_mV[BQ76930_CELL_COUNT
 uint8_t BQ76930_AnalyzeCellVoltages(const uint16_t voltage_mV[BQ76930_CELL_COUNT],
                                     BQ76930_CellStats_t *stats)
 {
+    /* 真实 6S 硬件映射：逻辑下标 i → VC label */
+    static const uint8_t cell_label[BQ76930_CELL_COUNT] =
+    {
+        1U, 2U, 5U, 6U, 7U, 10U
+    };
+
     uint8_t i;
     uint8_t max_idx = 0;
     uint8_t min_idx = 0;
@@ -346,8 +532,8 @@ uint8_t BQ76930_AnalyzeCellVoltages(const uint16_t voltage_mV[BQ76930_CELL_COUNT
     stats->max_mV = voltage_mV[max_idx];
     stats->min_mV = voltage_mV[min_idx];
     stats->diff_mV = (uint16_t)(stats->max_mV - stats->min_mV);
-    stats->max_cell_index = max_idx;
-    stats->min_cell_index = min_idx;
+    stats->max_cell_label = cell_label[max_idx];
+    stats->min_cell_label = cell_label[min_idx];
 
     return BQ76930_OK;
 }
@@ -451,6 +637,90 @@ uint8_t BQ76930_ConvertNtcTemp_dC(uint16_t raw_adc, int16_t *temp_dC)
 
     /* 转 0.1°C */
     *temp_dC = (int16_t)(temp_C * 10.0f + (temp_C >= 0 ? 0.5f : -0.5f));
+
+    return BQ76930_OK;
+}
+
+/* ==================== 均衡（CELLBAL） ==================== */
+
+uint8_t BQ76930_ReadCellBalRegs(BQ76930_CellBalRegs_t *regs)
+{
+    if (regs == 0U)
+    {
+        return BQ76930_ERR_PARAM;
+    }
+
+    if (BQ76930_ReadReg(BQ76930_REG_CELLBAL1, &regs->cellbal1) != BQ76930_OK) return 2;
+    if (BQ76930_ReadReg(BQ76930_REG_CELLBAL2, &regs->cellbal2) != BQ76930_OK) return 3;
+
+    return BQ76930_OK;
+}
+
+uint8_t BQ76930_WriteCellBalRegs(const BQ76930_CellBalRegs_t *regs)
+{
+    if (regs == 0U)
+    {
+        return BQ76930_ERR_PARAM;
+    }
+
+    /* CELLBAL 为配置类寄存器，写操作必须带 PEC（与参考例程一致） */
+    if (BQ76930_WriteReg_CRC(BQ76930_REG_CELLBAL1, regs->cellbal1) != BQ76930_OK) return 2;
+    if (BQ76930_WriteReg_CRC(BQ76930_REG_CELLBAL2, regs->cellbal2) != BQ76930_OK) return 3;
+
+    return BQ76930_OK;
+}
+
+void BQ76930_ClearCellBalRegs(BQ76930_CellBalRegs_t *regs)
+{
+    if (regs == 0U)
+    {
+        return;
+    }
+
+    regs->cellbal1 = 0x00;
+    regs->cellbal2 = 0x00;
+}
+
+/* 根据真实电芯编号（VC label，1/2/5/6/7/10）把对应均衡位置 1。
+ * 真实 6S 硬件映射：
+ *   逻辑 1  → CB1  → CELLBAL1 bit0
+ *   逻辑 2  → CB2  → CELLBAL1 bit1
+ *   逻辑 5  → CB5  → CELLBAL1 bit4
+ *   逻辑 6  → CB6  → CELLBAL2 bit0
+ *   逻辑 7  → CB7  → CELLBAL2 bit1
+ *   逻辑 10 → CB10 → CELLBAL2 bit4
+ * 禁止按逻辑 Cell1~6 直接映射 bit0~bit5。 */
+uint8_t BQ76930_BuildSingleCellBalMask(uint8_t cell_label,
+                                       BQ76930_CellBalRegs_t *regs)
+{
+    if (regs == 0U)
+    {
+        return BQ76930_ERR_PARAM;
+    }
+
+    switch (cell_label)
+    {
+    case 1:
+        regs->cellbal1 |= 0x01U; /* CELLBAL1 bit0 */
+        break;
+    case 2:
+        regs->cellbal1 |= 0x02U; /* CELLBAL1 bit1 */
+        break;
+    case 5:
+        regs->cellbal1 |= 0x10U; /* CELLBAL1 bit4 */
+        break;
+    case 6:
+        regs->cellbal2 |= 0x01U; /* CELLBAL2 bit0 */
+        break;
+    case 7:
+        regs->cellbal2 |= 0x02U; /* CELLBAL2 bit1 */
+        break;
+    case 10:
+        regs->cellbal2 |= 0x10U; /* CELLBAL2 bit4 */
+        break;
+    default:
+        return BQ76930_ERR_PARAM;
+    }
 
     return BQ76930_OK;
 }

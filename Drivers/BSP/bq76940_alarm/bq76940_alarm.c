@@ -1,7 +1,7 @@
 #include "bq76940_alarm.h"
 
 
-uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BQ76940_CELL_COUNT_9],
+uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BMS_CELL_COUNT],
                                   const BQ76940_CellStats9_t *stats,
                                   const BQ76940_AlarmThreshold9_t *th,
                                   BQ76940_AlarmState9_t *state)
@@ -9,7 +9,7 @@ uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BQ76940_CELL_COUNT_9
     uint8_t i;
 
     /* 当前板子的真实9节映射标签，不是连续1~9 */
-    static const uint8_t cell_label[BQ76940_CELL_COUNT_9] = {1, 2, 5, 6, 7, 10, 11, 12, 15};
+    static const uint8_t cell_label[BMS_CELL_COUNT] = {1, 2, 5, 6, 7, 10};
 
     /* =========================
      * 1. 参数检查
@@ -41,7 +41,7 @@ uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BQ76940_CELL_COUNT_9
 
         uint8_t all_cell_above_uv_exit = 1;
 
-        for (i = 0; i < BQ76940_CELL_COUNT_9; i++)
+        for (i = 0; i < BMS_CELL_COUNT; i++)
         {
             /* 2.1 统计“进入条件”：低于欠压进入阈值 */
             if (voltage_mV[i] < th->uv_enter_mV)
@@ -127,7 +127,7 @@ uint8_t BQ76940_UpdateAlarmState9(const uint16_t voltage_mV[BQ76940_CELL_COUNT_9
 
         uint8_t all_cell_below_ov_exit = 1;
 
-        for (i = 0; i < BQ76940_CELL_COUNT_9; i++)
+        for (i = 0; i < BMS_CELL_COUNT; i++)
         {
             /* 3.1 统计“进入条件”：高于过压进入阈值 */
             if (voltage_mV[i] > th->ov_enter_mV)

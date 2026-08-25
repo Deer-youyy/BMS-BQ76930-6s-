@@ -27,7 +27,7 @@ static int8_t BQ76940_AppJudgeCurrentDir(int32_t current_mA)
     }
 }
 
-uint8_t BQ76940_AppSampleReadHw(const BQ76940_AdcCalib_t *calib,
+uint8_t BQ76940_AppSampleReadHw(const BQ76930_AdcCalib_t *calib,
                                 BQ76940_AppSampleData_t *sample)
 {
     uint8_t ret;

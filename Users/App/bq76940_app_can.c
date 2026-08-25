@@ -114,12 +114,12 @@ void BQ76940_AppSendCanTelemetry(const BQ76940_AppCtx_t *ctx)
 
     BQ76940_AppPackU16LE(data, 0, ctx->cell_mV[4]);
     BQ76940_AppPackU16LE(data, 2, ctx->cell_mV[5]);
-    BQ76940_AppPackU16LE(data, 4, ctx->cell_mV[6]);
-    BQ76940_AppPackU16LE(data, 6, ctx->cell_mV[7]);
+    BQ76940_AppPackU16LE(data, 4, 0U);
+    BQ76940_AppPackU16LE(data, 6, 0U);
     ret = CAN_DrvSendStd(CAN_ID_BMS_CELL_5_8, data, 8);
     if (ret != 0U) return;
 
-    BQ76940_AppPackU16LE(data, 0, ctx->cell_mV[8]);
+    BQ76940_AppPackU16LE(data, 0, 0U);
     BQ76940_AppPackU16LE(data, 2, (uint16_t)ctx->ts1_temp_dC);
     data[4] = BQ76940_AppBuildAlarmFlags(ctx);
     data[5] = BQ76940_AppBuildProtectFlags(ctx);
@@ -312,7 +312,7 @@ void BQ76940_AppSendBalanceStatusCan(const BQ76940_AppCtx_t *ctx)
     data[1] = ctx->bal_target_count;
     data[2] = ctx->bal_auto_rd.cellbal1;
     data[3] = ctx->bal_auto_rd.cellbal2;
-    data[4] = ctx->bal_auto_rd.cellbal3;
+    data[4] = 0U;
     data[5] = ctx->bal_parity_phase;
     data[6] = ctx->bal_target_label;
     data[7] = 0U;
