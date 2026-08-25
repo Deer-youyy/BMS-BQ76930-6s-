@@ -46,8 +46,8 @@ void BQ76940_AppInitDefaultConfig(BQ76940_AppCtx_t *ctx)
     ctx->ut_chg_block_active = 0;
 
     /* 硬件保护真实配置 */
-    ctx->hw_cfg.ov_target_mV = 4200;
-    ctx->hw_cfg.uv_target_mV = 3000;
+    ctx->hw_cfg.ov_target_mV = 4500;
+    ctx->hw_cfg.uv_target_mV = 2400;
     ctx->hw_cfg.protect3 = 0x50;
 
     /* 新增：电流相关初值 */
@@ -273,6 +273,18 @@ static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
     if (BMS_LOG_PERIODIC_ENABLE != 0U)
         BQ76940_PrintBasicRegs(&ctx->regs);
 
+
+    /* 5. 加载 OCD / SCD 硬件保护参数 */
+    /* 5b. OCD/SCD hardware protection: real source OCD_SCD_PROTECT sets PROTECT1/2 = 0xFF. */
+    ret = BQ76930_HalLoadOcdScdProtection();
+    if (ret != 0U)
+    {
+        BQ76940_AppSetBringUpFault(ctx,
+                                   BQ76940_BRINGUP_STAGE_OCDSCD,
+                                   ret);
+        return 14U;
+    }
+
     /* 4. 读取当前硬件状态 */
     ret = BQ76930_HalReadSysStat(&ctx->sys_stat);
     if (ret != 0U)
@@ -290,17 +302,6 @@ static uint8_t BQ76940_AppBringUpOnce(BQ76940_AppCtx_t *ctx)
                                    BQ76940_BRINGUP_STAGE_STATUS,
                                    ret);
         return 13U;
-    }
-
-    /* 5. 加载 OCD / SCD 硬件保护参数 */
-    /* BQ76930 OCD/SCD are fixed by InitForBringUp (PROTECT1/2 = 0xFF); no runtime write. */
-    ret = BQ76930_OK;
-    if (ret != 0U)
-    {
-        BQ76940_AppSetBringUpFault(ctx,
-                                   BQ76940_BRINGUP_STAGE_OCDSCD,
-                                   ret);
-        return 14U;
     }
 
     if (BMS_LOG_PERIODIC_ENABLE != 0U)

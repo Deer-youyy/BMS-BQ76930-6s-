@@ -179,6 +179,7 @@ uint8_t BQ76930_CalcOvTripFrommV(uint16_t ov_mV,
 uint8_t BQ76930_CalcUvTripFrommV(uint16_t uv_mV,
                                  uint16_t gain_uV_per_lsb,
                                  int16_t offset_mV);
+uint8_t BQ76930_LoadOcdScdProtection(void);
 uint8_t BQ76930_ProtectGetActiveFaultMask(uint8_t sys_stat, uint8_t *fault_mask);
 uint8_t BQ76930_ProtectClearFaultBits(uint8_t fault_mask);
 

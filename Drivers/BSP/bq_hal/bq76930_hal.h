@@ -49,6 +49,8 @@ uint8_t BQ76930_HalLoadProtection(uint8_t protect3,
                                   uint16_t uv_target_mV,
                                   const BQ76930_AdcCalib_t *calib);
 
+uint8_t BQ76930_HalLoadOcdScdProtection(void);
+
 /* ---- balance raw registers ---- */
 uint8_t BQ76930_HalReadCellBalRegs(BQ76930_CellBalRegs_t *regs);
 

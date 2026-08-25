@@ -214,6 +214,11 @@ uint8_t BQ76930_HalLoadProtection(uint8_t protect3,
     return BQ76930_LoadProtectionParams(protect3, ov_trip, uv_trip);
 }
 
+uint8_t BQ76930_HalLoadOcdScdProtection(void)
+{
+    return BQ76930_LoadOcdScdProtection();
+}
+
 uint8_t BQ76930_HalReadCellBalRegs(BQ76930_CellBalRegs_t *regs)
 {
     return BQ76930_ReadCellBalRegs(regs);

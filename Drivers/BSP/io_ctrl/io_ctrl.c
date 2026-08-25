@@ -4,7 +4,7 @@
 /*==================== 用户根据原理图修改这里 ====================*/
 #define BQ_WAKE_GPIO_PORT     GPIOA
 #define BQ_WAKE_GPIO_PIN      GPIO_PIN_8
-#define BQ_WAKE_GPIO_CLK_EN() __HAL_RCC_GPIOB_CLK_ENABLE()
+#define BQ_WAKE_GPIO_CLK_EN() __HAL_RCC_GPIOA_CLK_ENABLE()
 /*==============================================================*/
 
 void IO_CTRL_Init(void)

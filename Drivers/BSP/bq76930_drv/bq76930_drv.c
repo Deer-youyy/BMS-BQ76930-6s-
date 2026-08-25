@@ -191,7 +191,7 @@ uint8_t BQ76930_InitForBringUp(void)
 
     static const uint8_t data_table[BQ76930_BASIC_REG_COUNT] =
     {
-        0xFF, 0x00, 0x00, 0x18, 0x43, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x19
+        0xFF, 0x00, 0x00, 0x18, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19
     };
 
     uint8_t i;
@@ -250,7 +250,8 @@ uint8_t BQ76930_CalcOvTripFrommV(uint16_t ov_mV,
     uint32_t full_adc;
 
     /* full_adc ≈ (ov_mV - offset_mV) / (gain_uV_per_lsb / 1000) */
-    full_adc = ((uint32_t)(ov_mV - offset_mV) * 1000U) / gain_uV_per_lsb;
+    (void)gain_uV_per_lsb; /* source OV_UV_1_PROTECT uses fixed 0.377 mV/LSB */
+    full_adc = (uint32_t)((((int32_t)ov_mV - (int32_t)offset_mV) * 1000L + 188L) / 377L);
 
     /* 取 14 位 ADC 值的中间 8 位 */
     return (uint8_t)((full_adc >> 4) & 0xFFU);
@@ -262,7 +263,8 @@ uint8_t BQ76930_CalcUvTripFrommV(uint16_t uv_mV,
 {
     uint32_t full_adc;
 
-    full_adc = ((uint32_t)(uv_mV - offset_mV) * 1000U) / gain_uV_per_lsb;
+    (void)gain_uV_per_lsb; /* source OV_UV_1_PROTECT uses fixed 0.377 mV/LSB */
+    full_adc = (uint32_t)((((int32_t)uv_mV - (int32_t)offset_mV) * 1000L + 188L) / 377L);
 
     return (uint8_t)((full_adc >> 4) & 0xFFU);
 }
@@ -725,3 +727,16 @@ uint8_t BQ76930_BuildSingleCellBalMask(uint8_t cell_label,
     return BQ76930_OK;
 }
 
+/* 源码 OCD_SCD_PROTECT(): PROTECT1/2 = 0xFF (SCD 66A/33mV/400us, OCD 100A/50mV/1280ms). */
+uint8_t BQ76930_LoadOcdScdProtection(void)
+{
+    if (BQ76930_WriteReg_CRC(BQ76930_REG_PROTECT1, 0xFF) != BQ76930_OK)
+    {
+        return 2;
+    }
+    if (BQ76930_WriteReg_CRC(BQ76930_REG_PROTECT2, 0xFF) != BQ76930_OK)
+    {
+        return 3;
+    }
+    return BQ76930_OK;
+}
