@@ -69,7 +69,7 @@ static void BMS_AlertSimTestTask(void *argument);
 static void BMS_AfeWriteInhibitSet(void);
 static uint8_t BMS_AfeWriteIsInhibited(void);
 static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat);
-static uint8_t BMS_HwFaultApplyHwWithRetry(const BQ76940_OcdScdRequest_t *req);
+static uint8_t BMS_HwFaultApplyHwWithRetry(BMS_OcdScdRequest_t *req);
 
 #if (BMS_TEST_SAFE_OFF_READBACK_ENABLE != 0U)
 static void BMS_RuntimeSafeOffReadback(BMS_ServiceContext_t *svc);
@@ -188,7 +188,7 @@ BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc, BQ76940_AppCtx_t *app)
     result = xTaskCreate(BMS_HwFaultTask,
                          "BMS_HwFault",
                          BMS_HW_FAULT_TASK_STACK_WORDS,
-                         app,
+                         svc,
                          BMS_HW_FAULT_TASK_PRIORITY,
                          NULL);
     if (result != pdPASS)
@@ -200,7 +200,7 @@ BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc, BQ76940_AppCtx_t *app)
     result = xTaskCreate(BMS_ProtectTask,
                          "BMS_Protect",
                          BMS_PROTECT_TASK_STACK_WORDS,
-                         app,
+                         svc,
                          BMS_PROTECT_TASK_PRIORITY,
                          NULL);
     if (result != pdPASS)
@@ -212,7 +212,7 @@ BaseType_t BMS_TasksCreate(BMS_ServiceContext_t *svc, BQ76940_AppCtx_t *app)
     result = xTaskCreate(BMS_BalanceTask,
                          "BMS_Balance",
                          BMS_BALANCE_TASK_STACK_WORDS,
-                         app,
+                         svc,
                          BMS_BALANCE_TASK_PRIORITY,
                          NULL);
     if (result != pdPASS)
@@ -706,7 +706,7 @@ static void BMS_CANTask(void *argument)
 
 static void BMS_ProtectTask(void *argument)
 {
-    BQ76940_AppCtx_t *app = (BQ76940_AppCtx_t *)argument;
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
 
     for (;;)
     {
@@ -714,24 +714,15 @@ static void BMS_ProtectTask(void *argument)
         {
             uint8_t ret = 0U;
             uint8_t runtime_fault = 0U;
+            uint8_t need_apply = 0U;
 
-            BQ76940_OtProtectRequest_t ot_req;
-            BQ76940_UtProtectRequest_t ut_req;
+            BMS_OtProtectRequest_t ot_req;
+            BMS_UtProtectRequest_t ut_req;
 
-            /*
-             * 0. Runtime fault 门控
-             *
-             * 作用：
-             *   防止旧的 protect_sem 被消费后，
-             *   ProtectTask 继续基于旧采样数据执行保护/均衡链路。
-             *
-             * 注意：
-             *   这里不做 Safe-Off。
-             *   Safe-Off 由 RuntimeTask 统一处理。
-             */
+            /* 0. ctx lock: runtime fault gate. */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                runtime_fault = BQ76940_AppRuntimeDiagIsFaultActive(app);
+                BMS_ServiceRuntimeFaultActive(svc, &runtime_fault);
                 xSemaphoreGive(g_bms_ctx_mutex);
             }
             else
@@ -741,43 +732,15 @@ static void BMS_ProtectTask(void *argument)
 
             if ((ret == 0U) && (runtime_fault != 0U))
             {
-                /*
-                 * 已经进入 Runtime fault：
-                 * - 不更新软件保护
-                 * - 不继续 give g_balance_sem
-                 */
                 continue;
             }
 
-            /*
-             * 1. Base + Decide 阶段
-             *
-             * Base:
-             *   - 更新 UV / OV / DIFF / OT / UT 软件告警
-             *
-             * OT Decide:
-             *   - 判断是否需要 CHG/DSG OFF 或 ON
-             *
-             * UT Decide:
-             *   - 判断是否需要 CHG OFF 或 ON
-             *
-             * 这一步只读取/更新 app 状态，不主动访问 I2C。
-             */
+            /* 1. ctx lock: base + OT/UT decide. */
             if (ret == 0U)
             {
                 if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
                 {
-                    ret = BQ76940_AppProtectUpdateBase(app);
-
-                    if (ret == 0U)
-                    {
-                        ret = BQ76940_AppOtProtectDecide(app, &ot_req);
-                    }
-
-                    if (ret == 0U)
-                    {
-                        ret = BQ76940_AppUtProtectDecide(app, &ut_req);
-                    }
+                    ret = BMS_ServiceProtectCompute(svc, &ot_req, &ut_req);
                     xSemaphoreGive(g_bms_ctx_mutex);
                 }
                 else
@@ -786,62 +749,34 @@ static void BMS_ProtectTask(void *argument)
                 }
             }
 
-            /*
-             * 2. ApplyHw 阶段
-             *
-             * 只有真正需要写 BQ76940 FET / CHG / DSG 时，
-             * 才申请 I2C mutex。
-             *
-             * 执行顺序：
-             *   1. OT
-             *   2. UT
-             *
-             * 这样更安全：
-             *   - OT 可同时关 CHG/DSG
-             *   - UT 可进一步确保 CHG 关闭
-             */
+            /* 2. i2c lock: apply when action requested. */
             if (ret == 0U)
             {
-                if ((ot_req.action != BQ76940_OT_ACTION_NONE) ||
-                    (ut_req.action != BQ76940_UT_ACTION_NONE))
+                need_apply = ((ot_req.action != BMS_OT_ACTION_NONE) ||
+                              (ut_req.action != BMS_UT_ACTION_NONE)) ? 1U : 0U;
+            }
+
+            if (need_apply != 0U)
+            {
+                if (xSemaphoreTake(g_i2c_bus_mutex,
+                                   pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
                 {
-                    if (xSemaphoreTake(g_i2c_bus_mutex, pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
+                    if (BMS_AfeWriteIsInhibited() != 0U)
                     {
-
-                        if (BMS_AfeWriteIsInhibited() != 0U)
-                        {
-
-                            xSemaphoreGive(g_i2c_bus_mutex);
-                            continue;
-                        }
-
-                        if (ot_req.action != BQ76940_OT_ACTION_NONE)
-                        {
-                            ret = BQ76940_AppOtProtectApplyHw(&ot_req);
-                        }
-
-                        if ((ret == 0U) &&
-                            (ut_req.action != BQ76940_UT_ACTION_NONE))
-                        {
-                            ret = BQ76940_AppUtProtectApplyHw(&ut_req);
-                        }
                         xSemaphoreGive(g_i2c_bus_mutex);
+                        continue;
                     }
-                    else
-                    {
-                        ret = BMS_TASK_RET_I2C_LOCK_TIMEOUT;
-                    }
+
+                    ret = BMS_ServiceProtectApplyI2c(&ot_req, &ut_req);
+                    xSemaphoreGive(g_i2c_bus_mutex);
+                }
+                else
+                {
+                    ret = BMS_TASK_RET_I2C_LOCK_TIMEOUT;
                 }
             }
 
-            /*
-             * 3. Commit 阶段
-             *
-             * 将 OT / UT / OCDSCD 的执行结果提交回 app。
-             *
-             * 注意：
-             *   Commit 不访问 I2C，只修改 app 状态。
-             */
+            /* 3. ctx lock: commit. */
             if (ret == 0U)
             {
                 if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
@@ -849,30 +784,12 @@ static void BMS_ProtectTask(void *argument)
                     if (BMS_AfeWriteIsInhibited() != 0U)
                     {
                         xSemaphoreGive(g_bms_ctx_mutex);
-
-                        /*
-                         * 不提交旧保护动作。
-                         * 通知 ControlTask 维持 BQ76200 OFF。
-                         */
                         xSemaphoreGive(g_control_sem);
                         continue;
                     }
 
-                    ret = BQ76940_AppOtProtectCommit(app, &ot_req);
+                    ret = BMS_ServiceProtectCommit(svc, &ot_req, &ut_req);
 
-                    if (ret == 0U)
-                    {
-                        ret = BQ76940_AppUtProtectCommit(app, &ut_req);
-                    }
-
-                    /*
-                     * 保护阶段完成后，继续通知 BalanceTask。
-                     *
-                     * 注意：
-                     *   如果 runtime fault 已经 active，
-                     *   前面第 0 步已经 continue 了，
-                     *   所以这里不会在故障状态下继续接力。
-                     */
                     if (ret == 0U)
                     {
                         xSemaphoreGive(g_balance_sem);
@@ -893,10 +810,9 @@ static void BMS_ProtectTask(void *argument)
         }
     }
 }
-
 static void BMS_BalanceTask(void *argument)
 {
-    BQ76940_AppCtx_t *app = (BQ76940_AppCtx_t *)argument;
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
 
     for (;;)
     {
@@ -905,23 +821,14 @@ static void BMS_BalanceTask(void *argument)
             uint8_t ret = 0U;
             uint8_t runtime_fault = 0U;
             uint32_t now_ms;
+            uint8_t need_apply = 0U;
 
-            BQ76940_BalanceRequest_t bal_req;
+            BMS_BalanceRequest_t bal_req;
 
-            /*
-             * 0. Runtime fault 门控
-             *
-             * 作用：
-             *   防止旧的 balance_sem 被消费后，
-             *   BalanceTask 继续基于旧采样数据执行均衡。
-             *
-             * 注意：
-             *   如果故障发生前已经在均衡，
-             *   RuntimeTask 的 Safe-Off 会负责清 CELLBAL。
-             */
+            /* 0. ctx lock: runtime fault gate. */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                runtime_fault = BQ76940_AppRuntimeDiagIsFaultActive(app);
+                BMS_ServiceRuntimeFaultActive(svc, &runtime_fault);
                 xSemaphoreGive(g_bms_ctx_mutex);
             }
             else
@@ -931,28 +838,17 @@ static void BMS_BalanceTask(void *argument)
 
             if ((ret == 0U) && (runtime_fault != 0U))
             {
-                /*
-                 * 已经进入 Runtime fault：
-                 * - 不再执行均衡 Decide
-                 * - 不再写 CELLBAL
-                 * - 主动通知 ControlTask，让 BQ76200 保持 OFF
-                 */
                 xSemaphoreGive(g_control_sem);
                 continue;
             }
 
-            /*
-             * 1. Decide 阶段
-             *
-             * 只读取 app 状态，生成本轮均衡请求。
-             * 不访问 I2C。
-             */
+            /* 1. ctx lock: decide. */
             if (ret == 0U)
             {
                 if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
                 {
                     now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-                    ret = BQ76940_AppBalanceDecide(app, &bal_req, now_ms);
+                    ret = BMS_ServiceBalanceDecide(svc, &bal_req, now_ms);
                     xSemaphoreGive(g_bms_ctx_mutex);
                 }
                 else
@@ -961,44 +857,34 @@ static void BMS_BalanceTask(void *argument)
                 }
             }
 
-            /*
-             * 2. ApplyHw 阶段
-             *
-             * 只有 START / STOP 需要写 CELLBAL 时才访问 I2C。
-             */
+            /* 2. i2c lock: apply when action requested. */
             if (ret == 0U)
             {
-                if (bal_req.action != BQ76940_BAL_ACTION_NONE)
+                need_apply = (bal_req.action != BMS_BAL_ACTION_NONE) ? 1U : 0U;
+            }
+
+            if (need_apply != 0U)
+            {
+                if (xSemaphoreTake(g_i2c_bus_mutex,
+                                   pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
                 {
-                    if (xSemaphoreTake(g_i2c_bus_mutex, pdMS_TO_TICKS(BMS_I2C_MUTEX_TIMEOUT_MS)) == pdTRUE)
+                    if (BMS_AfeWriteIsInhibited() != 0U)
                     {
-                        if (BMS_AfeWriteIsInhibited() != 0U)
-                        {
-                            /*
-                             * Runtime fault 已锁存。
-                             * 禁止旧 START 请求重新开启 CELLBAL。
-                             */
-                            xSemaphoreGive(g_i2c_bus_mutex);
-                            xSemaphoreGive(g_control_sem);
-                            continue;
-                        }
-
-                        ret = BQ76940_AppBalanceApplyHw(&bal_req);
-
                         xSemaphoreGive(g_i2c_bus_mutex);
+                        xSemaphoreGive(g_control_sem);
+                        continue;
                     }
-                    else
-                    {
-                        ret = BMS_TASK_RET_I2C_LOCK_TIMEOUT;
-                    }
+
+                    ret = BMS_ServiceBalanceApplyI2c(&bal_req);
+                    xSemaphoreGive(g_i2c_bus_mutex);
+                }
+                else
+                {
+                    ret = BMS_TASK_RET_I2C_LOCK_TIMEOUT;
                 }
             }
 
-            /*
-             * 3. Commit 阶段
-             *
-             * 将均衡执行结果提交回 app。
-             */
+            /* 3. ctx lock: commit (bal_auto updated in Service). */
             if (ret == 0U)
             {
                 if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
@@ -1010,21 +896,8 @@ static void BMS_BalanceTask(void *argument)
                         continue;
                     }
 
-                    ret = BQ76940_AppBalanceCommit(app, &bal_req);
-                    /*
-                     * 通过 Provider 兼容 API，把逻辑 mask 转换回 legacy
-                     * BQ76940_CellBalRegs_t，用于 CAN 0x306 与 Safe-Off 快照。
-                     * 仅在 START/STOP 动作后回填，NONE 动作不回填。
-                     */
-                    if ((ret == 0U) && (bal_req.action != BQ76940_BAL_ACTION_NONE))
-                    {
-                        BqHalBalance_GetLegacyCellBalRegs(&bal_req.wr, &app->bal_auto_wr);
-                        BqHalBalance_GetLegacyCellBalRegs(&bal_req.rd, &app->bal_auto_rd);
-                    }
+                    ret = BMS_ServiceBalanceCommit(svc, &bal_req);
 
-                    /*
-                     * 均衡阶段结束后，继续通知 ControlTask。
-                     */
                     if (ret == 0U)
                     {
                         xSemaphoreGive(g_control_sem);
@@ -1045,7 +918,6 @@ static void BMS_BalanceTask(void *argument)
         }
     }
 }
-
 static void BMS_ControlTask(void *argument)
 {
     BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
@@ -1261,7 +1133,7 @@ void BMS_HwFaultNotifyFromISR(void)
 
 static void BMS_HwFaultTask(void *argument)
 {
-    BQ76940_AppCtx_t *app = (BQ76940_AppCtx_t *)argument;
+    BMS_ServiceContext_t *svc = (BMS_ServiceContext_t *)argument;
 
     for (;;)
     {
@@ -1273,10 +1145,10 @@ static void BMS_HwFaultTask(void *argument)
             uint8_t notify_control = 0U;
             uint8_t sys_stat = 0U;
             BMS_HwFaultState_t fault_state;
+            BMS_OcdScdRequest_t req;
+            BMS_HwFaultCounters_t counters;
 
-            BQ76940_OcdScdRequest_t req;
-
-            BQ76940_AppOcdScdRequestClear(&req);
+            BMS_ServiceHwFaultRequestClear(&req);
 
             BMS_LOG_HW_FAULT("[HW] alert\r\n");
 
@@ -1315,26 +1187,16 @@ static void BMS_HwFaultTask(void *argument)
                 BMS_LOG_HW_FAULT("[HW] CC_READY\r\n");
             }
 
-            /*
-             * 当前 V1 只处理 OCD/SCD。
-             * 如果本次 ALERT 不是 OCD/SCD，先返回等待下次事件。
-             */
             if (fault_state.current_fault_active == 0U)
             {
                 BMS_LOG_TEST_HW_FAULT("[HW] no OCD/SCD\r\n");
                 continue;
             }
 
-            /*
-             * 将本次 SYS_STAT 快照提交到 app，
-             * 然后复用 OCD/SCD Decide 逻辑。
-             */
+            /* ctx lock: record SYS_STAT and decide. */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                app->sys_stat = sys_stat;
-
-                ret = BQ76940_AppOcdScdDecide(app, &req);
-
+                ret = BMS_ServiceHwFaultDecide(svc, &req, sys_stat);
                 xSemaphoreGive(g_bms_ctx_mutex);
             }
             else
@@ -1354,21 +1216,8 @@ static void BMS_HwFaultTask(void *argument)
                                   req.scd_now,
                                   req.hw_fault_now);
 
-            /*
-             * ApplyHw 阶段：
-             * 尝试补写 BQ76940 DSG OFF。
-             *
-             * 注意：
-             *   对 OCD/SCD 来说，真实硬件中 BQ76940 已经可能自动关断。
-             *   这里的 ApplyHw 是 best-effort 补充动作。
-             *   即使 I2C 锁失败，也不能阻止 Commit 锁存故障。
-             */
             apply_ret = BMS_HwFaultApplyHwWithRetry(&req);
-            /*
-             * 注意：
-             * apply_ret 必须在 Commit 前写入 req。
-             * 这样 Commit 才能记录到 hw_fault_last_apply_ret。
-             */
+
             req.apply_ret = apply_ret;
 
             if (apply_ret != 0U)
@@ -1376,14 +1225,10 @@ static void BMS_HwFaultTask(void *argument)
                 BMS_LOG_HW_FAULT("[HW] apply:%2x\r\n", req.apply_ret);
             }
 
-            /*
-             * Commit 阶段：
-             * 只要 SYS_STAT 确认 OCD/SCD，就必须锁存软件故障状态。
-             * 不能因为 ApplyHw 失败就不锁存。
-             */
+            /* ctx lock: commit. */
             if (xSemaphoreTake(g_bms_ctx_mutex, portMAX_DELAY) == pdTRUE)
             {
-                commit_ret = BQ76940_AppOcdScdCommit(app, &req);
+                commit_ret = BMS_ServiceHwFaultCommit(svc, &req, &counters);
 
                 if (commit_ret == 0U)
                 {
@@ -1407,17 +1252,16 @@ static void BMS_HwFaultTask(void *argument)
             if (notify_control != 0U)
             {
                 BMS_LOG_HW_FAULT("[HW] latched code:%d sys:%02X cnt:%d apply:%02X\r\n",
-                                 app->hw_fault_last_code,
-                                 app->hw_fault_sys_stat_latched,
-                                 app->hw_fault_count,
-                                 app->hw_fault_last_apply_ret);
+                                 counters.hw_fault_last_code,
+                                 counters.sys_stat_latched,
+                                 counters.hw_fault_count,
+                                 counters.last_apply_ret);
 
                 xSemaphoreGive(g_control_sem);
             }
         }
     }
 }
-
 #if (BMS_TEST_FAKE_ALERT_EXTI != 0U)
 static void BMS_AlertSimTestTask(void *argument)
 {
@@ -1473,7 +1317,7 @@ static uint8_t BMS_HwFaultReadSysStat(uint8_t *sys_stat)
 
     return ret;
 }
-static uint8_t BMS_HwFaultApplyHwWithRetry(const BQ76940_OcdScdRequest_t *req)
+static uint8_t BMS_HwFaultApplyHwWithRetry(BMS_OcdScdRequest_t *req)
 {
     uint8_t ret;
     uint8_t try_count;
@@ -1483,7 +1327,7 @@ static uint8_t BMS_HwFaultApplyHwWithRetry(const BQ76940_OcdScdRequest_t *req)
         return 1U;
     }
 
-    if (req->action == BQ76940_OCDSCD_ACTION_NONE)
+    if (req->action == BMS_OCDSCD_ACTION_NONE)
     {
         return 0U;
     }
@@ -1492,10 +1336,10 @@ static uint8_t BMS_HwFaultApplyHwWithRetry(const BQ76940_OcdScdRequest_t *req)
 
     for (try_count = 0; try_count < BMS_HW_FAULT_APPLY_MAX_TRIES; try_count++)
     {
-        if (xSemaphoreTake(g_i2c_bus_mutex, pdMS_TO_TICKS(BMS_HW_FAULT_I2C_TIMEOUT_MS)) == pdTRUE)
+        if (xSemaphoreTake(g_i2c_bus_mutex,
+                           pdMS_TO_TICKS(BMS_HW_FAULT_I2C_TIMEOUT_MS)) == pdTRUE)
         {
-            ret = BQ76940_AppOcdScdApplyHw(req);
-
+            ret = BMS_ServiceHwFaultApplyI2c(req);
             xSemaphoreGive(g_i2c_bus_mutex);
         }
         else
@@ -1510,7 +1354,6 @@ static uint8_t BMS_HwFaultApplyHwWithRetry(const BQ76940_OcdScdRequest_t *req)
                 BMS_LOG_HW_FAULT("[HW] apply retry ok:%d\r\n",
                                  (uint8_t)(try_count + 1U));
             }
-
             break;
         }
 

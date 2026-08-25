@@ -6,6 +6,11 @@
 #include "bq76940_app_sample.h"
 #include "bq76940_app_runtime_diag.h"
 #include "bq76940_app_control.h"
+#include "bq76940_app_protect.h"
+#include "bq76940_app_balance.h"
+#include "bq76940_app_hw_fault.h"
+#include "bq_hal_balance.h"
+#include "bq76930_balance.h"
 
 /* BMS Service 上下文：不透明类型的实际定义。
  * 只保存装配层注入的 Legacy App 指针，所有 App 访问都走该指针。 */
@@ -338,4 +343,382 @@ uint8_t BMS_ServiceControlUpdate(BMS_ServiceContext_t *svc)
     }
 
     return BQ76940_AppControlUpdate(svc->legacy);
+}
+
+
+/* ---------------- Protect锛氫腑鎬ф槧灏?+ Service锛堥攣鍩熷唴璋冪敤锛屾棤閿侊級 ---------------- */
+
+static void BMS_MapOtReqToLegacy(const BMS_OtProtectRequest_t *src,
+                                 BQ76940_OtProtectRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->ot_now = src->ot_now;
+    dst->ov_now = src->ov_now;
+    dst->uv_now = src->uv_now;
+    dst->ot_cutoff_active_snapshot = src->ot_cutoff_active_snapshot;
+}
+
+static void BMS_MapOtReqFromLegacy(const BQ76940_OtProtectRequest_t *src,
+                                   BMS_OtProtectRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->ot_now = src->ot_now;
+    dst->ov_now = src->ov_now;
+    dst->uv_now = src->uv_now;
+    dst->ot_cutoff_active_snapshot = src->ot_cutoff_active_snapshot;
+}
+
+static void BMS_MapUtReqToLegacy(const BMS_UtProtectRequest_t *src,
+                                 BQ76940_UtProtectRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->ut_now = src->ut_now;
+    dst->ov_now = src->ov_now;
+    dst->ot_now = src->ot_now;
+    dst->ot_cutoff_active_snapshot = src->ot_cutoff_active_snapshot;
+    dst->ut_chg_block_active_snapshot = src->ut_chg_block_active_snapshot;
+}
+
+static void BMS_MapUtReqFromLegacy(const BQ76940_UtProtectRequest_t *src,
+                                   BMS_UtProtectRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->ut_now = src->ut_now;
+    dst->ov_now = src->ov_now;
+    dst->ot_now = src->ot_now;
+    dst->ot_cutoff_active_snapshot = src->ot_cutoff_active_snapshot;
+    dst->ut_chg_block_active_snapshot = src->ut_chg_block_active_snapshot;
+}
+
+void BMS_ServiceRuntimeFaultActive(BMS_ServiceContext_t *svc, uint8_t *active)
+{
+    if (active == NULL)
+    {
+        return;
+    }
+    *active = 0U;
+
+    if ((svc == NULL) || (svc->legacy == NULL))
+    {
+        return;
+    }
+
+    *active = (uint8_t)BQ76940_AppRuntimeDiagIsFaultActive(svc->legacy);
+}
+
+uint8_t BMS_ServiceProtectCompute(BMS_ServiceContext_t *svc,
+                                  BMS_OtProtectRequest_t *ot,
+                                  BMS_UtProtectRequest_t *ut)
+{
+    BQ76940_OtProtectRequest_t lot;
+    BQ76940_UtProtectRequest_t lut;
+    uint8_t ret;
+    BQ76940_AppCtx_t *legacy;
+
+    if ((svc == NULL) || (svc->legacy == NULL))
+    {
+        return 1U;
+    }
+    legacy = svc->legacy;
+
+    ret = BQ76940_AppProtectUpdateBase(legacy);
+    if (ret == 0U)
+    {
+        ret = BQ76940_AppOtProtectDecide(legacy, &lot);
+    }
+    if (ret == 0U)
+    {
+        ret = BQ76940_AppUtProtectDecide(legacy, &lut);
+    }
+    if (ret == 0U)
+    {
+        if (ot != NULL)
+        {
+            BMS_MapOtReqFromLegacy(&lot, ot);
+        }
+        if (ut != NULL)
+        {
+            BMS_MapUtReqFromLegacy(&lut, ut);
+        }
+    }
+
+    return ret;
+}
+
+uint8_t BMS_ServiceProtectApplyI2c(BMS_OtProtectRequest_t *ot,
+                                   BMS_UtProtectRequest_t *ut)
+{
+    BQ76940_OtProtectRequest_t lot;
+    BQ76940_UtProtectRequest_t lut;
+    uint8_t ret = 0U;
+
+    if (ot == NULL)
+    {
+        return 1U;
+    }
+    if (ut == NULL)
+    {
+        return 1U;
+    }
+
+    BMS_MapOtReqToLegacy(ot, &lot);
+    BMS_MapUtReqToLegacy(ut, &lut);
+
+    if (lot.action != BQ76940_OT_ACTION_NONE)
+    {
+        ret = BQ76940_AppOtProtectApplyHw(&lot);
+    }
+    if ((ret == 0U) && (lut.action != BQ76940_UT_ACTION_NONE))
+    {
+        ret = BQ76940_AppUtProtectApplyHw(&lut);
+    }
+
+    return ret;
+}
+
+uint8_t BMS_ServiceProtectCommit(BMS_ServiceContext_t *svc,
+                                 const BMS_OtProtectRequest_t *ot,
+                                 const BMS_UtProtectRequest_t *ut)
+{
+    BQ76940_OtProtectRequest_t lot;
+    BQ76940_UtProtectRequest_t lut;
+    uint8_t ret;
+
+    if ((svc == NULL) || (svc->legacy == NULL) || (ot == NULL) || (ut == NULL))
+    {
+        return 1U;
+    }
+
+    BMS_MapOtReqToLegacy(ot, &lot);
+    BMS_MapUtReqToLegacy(ut, &lut);
+
+    ret = BQ76940_AppOtProtectCommit(svc->legacy, &lot);
+    if (ret == 0U)
+    {
+        ret = BQ76940_AppUtProtectCommit(svc->legacy, &lut);
+    }
+
+    return ret;
+}
+
+/* ---------------- Balance锛氫腑鎬ф槧灏?+ Service锛坆al_auto 鏇存柊鍦?Commit 鍐咃級 ---------------- */
+
+static void BMS_MapBalanceMaskToLegacy(const BMS_BalanceMask_t *src,
+                                       BqHalBalanceMask_t *dst)
+{
+    dst->logical_mask = src->logical_mask;
+}
+
+static void BMS_MapBalanceMaskFromLegacy(const BqHalBalanceMask_t *src,
+                                         BMS_BalanceMask_t *dst)
+{
+    dst->logical_mask = src->logical_mask;
+}
+
+static void BMS_MapBalanceReqToLegacy(const BMS_BalanceRequest_t *src,
+                                      BQ76940_BalanceRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->target_logical = src->target_logical;
+    dst->target_count   = src->target_count;
+    dst->reason         = src->reason;
+    BMS_MapBalanceMaskToLegacy(&src->wr, &dst->wr);
+    BMS_MapBalanceMaskToLegacy(&src->rd, &dst->rd);
+}
+
+static void BMS_MapBalanceReqFromLegacy(const BQ76940_BalanceRequest_t *src,
+                                        BMS_BalanceRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->target_logical = src->target_logical;
+    dst->target_count   = src->target_count;
+    dst->reason         = src->reason;
+    BMS_MapBalanceMaskFromLegacy(&src->wr, &dst->wr);
+    BMS_MapBalanceMaskFromLegacy(&src->rd, &dst->rd);
+}
+
+uint8_t BMS_ServiceBalanceDecide(BMS_ServiceContext_t *svc,
+                                 BMS_BalanceRequest_t *req,
+                                 uint32_t now_ms)
+{
+    BQ76940_BalanceRequest_t lreq;
+    uint8_t ret;
+
+    if ((svc == NULL) || (svc->legacy == NULL) || (req == NULL))
+    {
+        return 1U;
+    }
+
+    BQ76940_AppBalanceRequestClear(&lreq);
+
+    ret = BQ76940_AppBalanceDecide(svc->legacy, &lreq, now_ms);
+    if (ret == 0U)
+    {
+        BMS_MapBalanceReqFromLegacy(&lreq, req);
+    }
+
+    return ret;
+}
+
+uint8_t BMS_ServiceBalanceApplyI2c(BMS_BalanceRequest_t *req)
+{
+    BQ76940_BalanceRequest_t lreq;
+    uint8_t ret;
+
+    if (req == NULL)
+    {
+        return 1U;
+    }
+
+    BMS_MapBalanceReqToLegacy(req, &lreq);
+
+    ret = BQ76940_AppBalanceApplyHw(&lreq);
+    if (ret == 0U)
+    {
+        BMS_MapBalanceReqFromLegacy(&lreq, req);
+    }
+
+    return ret;
+}
+
+uint8_t BMS_ServiceBalanceCommit(BMS_ServiceContext_t *svc,
+                                 const BMS_BalanceRequest_t *req)
+{
+    BQ76940_BalanceRequest_t lreq;
+    uint8_t ret;
+    BQ76940_AppCtx_t *legacy;
+
+    if ((svc == NULL) || (svc->legacy == NULL) || (req == NULL))
+    {
+        return 1U;
+    }
+    legacy = svc->legacy;
+
+    BMS_MapBalanceReqToLegacy(req, &lreq);
+
+    ret = BQ76940_AppBalanceCommit(legacy, &lreq);
+
+    if ((ret == 0U) && (lreq.action != BQ76940_BAL_ACTION_NONE))
+    {
+        /* Legacy 鍙傝�冪姸鎬侊紙CAN 0x306 / Safe-Off锛夋敹杩?Service 鍐呴儴鏇存柊銆?*/
+        BqHalBalance_GetLegacyCellBalRegs(&lreq.wr, &legacy->bal_auto_wr);
+        BqHalBalance_GetLegacyCellBalRegs(&lreq.rd, &legacy->bal_auto_rd);
+    }
+
+    return ret;
+}
+
+/* ---------------- Hardware Fault锛氫腑鎬ф槧灏?+ Service ---------------- */
+
+static void BMS_MapOcdReqToLegacy(const BMS_OcdScdRequest_t *src,
+                                  BQ76940_OcdScdRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->sys_stat_snapshot = src->sys_stat_snapshot;
+    dst->hw_fault_now = src->hw_fault_now;
+    dst->fault_code   = src->fault_code;
+    dst->apply_ret    = src->apply_ret;
+    dst->ocd_now      = src->ocd_now;
+    dst->scd_now      = src->scd_now;
+    dst->recover_request = src->recover_request;
+}
+
+static void BMS_MapOcdReqFromLegacy(const BQ76940_OcdScdRequest_t *src,
+                                    BMS_OcdScdRequest_t *dst)
+{
+    dst->action = src->action;
+    dst->sys_stat_snapshot = src->sys_stat_snapshot;
+    dst->hw_fault_now = src->hw_fault_now;
+    dst->fault_code   = src->fault_code;
+    dst->apply_ret    = src->apply_ret;
+    dst->ocd_now      = src->ocd_now;
+    dst->scd_now      = src->scd_now;
+    dst->recover_request = src->recover_request;
+}
+
+void BMS_ServiceHwFaultRequestClear(BMS_OcdScdRequest_t *req)
+{
+    if (req == NULL)
+    {
+        return;
+    }
+
+    req->action           = BMS_OCDSCD_ACTION_NONE;
+    req->sys_stat_snapshot = 0U;
+    req->hw_fault_now      = 0U;
+    req->fault_code        = 0U;
+    req->apply_ret         = 0U;
+    req->ocd_now           = 0U;
+    req->scd_now           = 0U;
+    req->recover_request   = 0U;
+}
+
+uint8_t BMS_ServiceHwFaultDecide(BMS_ServiceContext_t *svc,
+                                 BMS_OcdScdRequest_t *req,
+                                 uint8_t sys_stat)
+{
+    BQ76940_OcdScdRequest_t lreq;
+    uint8_t ret;
+    BQ76940_AppCtx_t *legacy;
+
+    if ((svc == NULL) || (svc->legacy == NULL) || (req == NULL))
+    {
+        return 1U;
+    }
+    legacy = svc->legacy;
+
+    legacy->sys_stat = sys_stat;
+
+    BQ76940_AppOcdScdRequestClear(&lreq);
+
+    ret = BQ76940_AppOcdScdDecide(legacy, &lreq);
+    if (ret == 0U)
+    {
+        BMS_MapOcdReqFromLegacy(&lreq, req);
+    }
+
+    return ret;
+}
+
+uint8_t BMS_ServiceHwFaultApplyI2c(BMS_OcdScdRequest_t *req)
+{
+    BQ76940_OcdScdRequest_t lreq;
+
+    if (req == NULL)
+    {
+        return 1U;
+    }
+
+    BMS_MapOcdReqToLegacy(req, &lreq);
+
+    return BQ76940_AppOcdScdApplyHw(&lreq);
+}
+
+uint8_t BMS_ServiceHwFaultCommit(BMS_ServiceContext_t *svc,
+                                 const BMS_OcdScdRequest_t *req,
+                                 BMS_HwFaultCounters_t *counters)
+{
+    BQ76940_OcdScdRequest_t lreq;
+    uint8_t ret;
+    BQ76940_AppCtx_t *legacy;
+
+    if ((svc == NULL) || (svc->legacy == NULL) || (req == NULL))
+    {
+        return 1U;
+    }
+    legacy = svc->legacy;
+
+    BMS_MapOcdReqToLegacy(req, &lreq);
+
+    ret = BQ76940_AppOcdScdCommit(legacy, &lreq);
+
+    if (counters != NULL)
+    {
+        counters->hw_fault_last_code = legacy->hw_fault_last_code;
+        counters->sys_stat_latched   = legacy->hw_fault_sys_stat_latched;
+        counters->hw_fault_count     = legacy->hw_fault_count;
+        counters->last_apply_ret     = legacy->hw_fault_last_apply_ret;
+    }
+
+    return ret;
 }
